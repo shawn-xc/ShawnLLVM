@@ -103,13 +103,13 @@ LLVM backend是LLVM真正的后端，也是LLVM核心。包括编译，汇编，
 
 - llvm/examples: 一些经典案例，kaleidoscope语言案例和手册等
 
-- llvm/include:公共头文件
+- llvm/include: 存放 llvm 中作为库的那部分接口代码的 API 头文件。
 
 - llvm/bindings: LLVM基础件的绑定结构，允许使用c\C++之外的语言来使用LLVM，比如Go,Python。
 
 - llvm/project: 一些工程，这里也允许自己构建新工程。
 
-- llvm/test:功能和回归测试，sanity测试等。
+- llvm/test:功能和回归测试，sanity测试等。LLVM 支持一整套完整的测试，测试工具叫 lit，这个路径下放着各种测试用例。
 
 - llvm/utils: 一些实用工具。
 
@@ -124,6 +124,16 @@ LLVM backend是LLVM真正的后端，也是LLVM核心。包括编译，汇编，
   - llc: LLVM后端编译器，将LLVM bitecode转换为本地汇编代码.
 
   - opt: IR级别做程序优化的工具，输入和输出都是LLVM IR。设计编译器的同学需经常性调用这个工具来验证自己的优化pass是否正确。
+  - llvm/lib: llvm编译后生成的目录，存放了大多数的源码。
+    - lib/Analysis : 两个 LLVM IR 核心功能之一，各种程序分析，比如变量活跃性分析等。
+    - lib/Transforms :  两个 LLVM IR 核心功能之二，做 IR 到 IR 的程序变换，比如死代码消除，常量传播等。
+    - lib/IR :  LLVM IR 实现的核心，比如 LLVM IR 中的一些概念，比如 BasicBlock，会在这里定义。
+    - lib/AsmParser :  LLVM 汇编的 parser 实现，注意 LLVM 汇编不是机器汇编。
+    - lib/Bitcode :  LLVM 位码 \(bitcode\) 的操作。
+    - lib/Target :  目标架构下的所有描述，包括指令集、寄存器、机器调度等等和机器相关的信息。这个路径下又会细分不同的后端平台，比如 X86，ARM。
+    - lib/CodeGen ：代码生成库的实现核心。LLVM 官方会把后端分为目标相关的（target dependent）代码和目标无关的（target independent）代码。这里就存放这目标无关的代码，比如指令选择，指令调度，寄存器分配等。这里的代码一般情况下不用动，除非你的后端非常奇葩。
+    - lib/MC ： 存放与 Machine Code 有关的代码，MC 是后端到挺后边的时候，代码发射时的一种中间表示，也是整个 LLVM 常规编译流程中最后一个中间表示。这里提供的一些类是作为我们 lib/Target/Cpu0 下的类的基类。
+ 
 
 #### cmake编译命令
 
@@ -159,13 +169,6 @@ cmake配置参数中有不少与LLVM相关的参数配置，具体请参见链�
 | LLVM_ENABLE_LIBCXX       | BOOL   | If the host compiler and linker supports the stdlib flag, -stdlib=libc++ is passed to invocations of both so that the project is built using libc++ instead of stdlibc++. Defaults to OFF. |
 | LLVM_ABI_BREAKING_CHECKS | STRING | Used to decide if LLVM should be built with ABI breaking checks or not. Allowed values are WITH_ASSERTS (default), FORCE_ON and FORCE_OFF. WITH_ASSERTS turns on ABI breaking checks in an assertion enabled build. FORCE_ON (FORCE_OFF) turns them on (off) irrespective of whether normal (NDEBUG-based) assertions are enabled or not. A version of LLVM built with ABI breaking checks is not ABI compatible with a version built without it. |
 
-
-
-#### **make的三个命令**
-
-- make clear
-- make install
-- make docs-llvm-html: 此命令被cmake -DLLVM_ENABLE_SPHINX=on控制，将在build目录下生成docs/html用于包含HTML格式的文档。
 
 
 
