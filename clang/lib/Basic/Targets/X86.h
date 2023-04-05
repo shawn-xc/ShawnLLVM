@@ -154,6 +154,7 @@ class LLVM_LIBRARY_VISIBILITY X86TargetInfo : public TargetInfo {
   bool HasAMXTILE = false;
   bool HasAMXINT8 = false;
   bool HasAMXBF16 = false;
+  bool HasAMXCOMPLEX = false;
   bool HasSERIALIZE = false;
   bool HasTSXLDTRK = false;
   bool HasUINTR = false;
@@ -205,9 +206,9 @@ public:
     return RegName.equals("esp") || RegName.equals("rsp");
   }
 
-  bool validateCpuSupports(StringRef Name) const override;
+  bool validateCpuSupports(StringRef FeatureStr) const override;
 
-  bool validateCpuIs(StringRef Name) const override;
+  bool validateCpuIs(StringRef FeatureStr) const override;
 
   bool validateCPUSpecificCPUDispatch(StringRef Name) const override;
 
@@ -963,6 +964,28 @@ class LLVM_LIBRARY_VISIBILITY AndroidX86_64TargetInfo
 public:
   AndroidX86_64TargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
       : LinuxTargetInfo<X86_64TargetInfo>(Triple, Opts) {
+    LongDoubleFormat = &llvm::APFloat::IEEEquad();
+  }
+};
+
+// x86_32 OHOS target
+class LLVM_LIBRARY_VISIBILITY OHOSX86_32TargetInfo
+    : public OHOSTargetInfo<X86_32TargetInfo> {
+public:
+  OHOSX86_32TargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+      : OHOSTargetInfo<X86_32TargetInfo>(Triple, Opts) {
+    SuitableAlign = 32;
+    LongDoubleWidth = 64;
+    LongDoubleFormat = &llvm::APFloat::IEEEdouble();
+  }
+};
+
+// x86_64 OHOS target
+class LLVM_LIBRARY_VISIBILITY OHOSX86_64TargetInfo
+    : public OHOSTargetInfo<X86_64TargetInfo> {
+public:
+  OHOSX86_64TargetInfo(const llvm::Triple &Triple, const TargetOptions &Opts)
+      : OHOSTargetInfo<X86_64TargetInfo>(Triple, Opts) {
     LongDoubleFormat = &llvm::APFloat::IEEEquad();
   }
 };

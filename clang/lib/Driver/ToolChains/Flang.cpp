@@ -11,6 +11,7 @@
 #include "CommonArgs.h"
 
 #include "clang/Driver/Options.h"
+#include "llvm/Frontend/Debug/Options.h"
 
 #include <cassert>
 
@@ -65,6 +66,20 @@ void Flang::addOtherOptions(const ArgList &Args, ArgStringList &CmdArgs) const {
   if (stackArrays &&
       !stackArrays->getOption().matches(options::OPT_fno_stack_arrays))
     CmdArgs.push_back("-fstack-arrays");
+
+  if (Args.hasArg(options::OPT_flang_experimental_hlfir))
+    CmdArgs.push_back("-flang-experimental-hlfir");
+
+  llvm::codegenoptions::DebugInfoKind DebugInfoKind;
+  if (Args.hasArg(options::OPT_gN_Group)) {
+    Arg *gNArg = Args.getLastArg(options::OPT_gN_Group);
+    DebugInfoKind = debugLevelToInfoKind(*gNArg);
+  } else if (Args.hasArg(options::OPT_g_Flag)) {
+    DebugInfoKind = llvm::codegenoptions::DebugLineTablesOnly;
+  } else {
+    DebugInfoKind = llvm::codegenoptions::NoDebugInfo;
+  }
+  addDebugInfoKind(CmdArgs, DebugInfoKind);
 }
 
 void Flang::addPicOptions(const ArgList &Args, ArgStringList &CmdArgs) const {
@@ -104,6 +119,8 @@ void Flang::addTargetOptions(const ArgList &Args,
   switch (TC.getArch()) {
   default:
     break;
+  case llvm::Triple::r600:
+  case llvm::Triple::amdgcn:
   case llvm::Triple::aarch64:
   case llvm::Triple::riscv64:
   case llvm::Triple::x86_64:
@@ -401,6 +418,9 @@ void Flang::ConstructJob(Compilation &C, const JobAction &JA,
   }
 
   assert(Input.isFilename() && "Invalid input.");
+
+  if (Args.getLastArg(options::OPT_save_temps_EQ))
+    Args.AddLastArg(CmdArgs, options::OPT_save_temps_EQ);
 
   addDashXForInput(Args, Input, CmdArgs);
 

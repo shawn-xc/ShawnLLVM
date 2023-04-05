@@ -95,7 +95,7 @@ struct MemIntrinsicInfo {
 /// Attributes of a target dependent hardware loop.
 struct HardwareLoopInfo {
   HardwareLoopInfo() = delete;
-  HardwareLoopInfo(Loop *L) : L(L) {}
+  HardwareLoopInfo(Loop *L);
   Loop *L = nullptr;
   BasicBlock *ExitBlock = nullptr;
   BranchInst *ExitBranch = nullptr;
@@ -190,6 +190,15 @@ enum class TailFoldingStyle {
   /// the trip count so that a runtime overflow check can be avoided
   /// and such that the scalar epilogue loop can always be removed.
   DataAndControlFlowWithoutRuntimeCheck
+};
+
+struct TailFoldingInfo {
+  TargetLibraryInfo *TLI;
+  LoopVectorizationLegality *LVL;
+  InterleavedAccessInfo *IAI;
+  TailFoldingInfo(TargetLibraryInfo *TLI, LoopVectorizationLegality *LVL,
+                  InterleavedAccessInfo *IAI)
+      : TLI(TLI), LVL(LVL), IAI(IAI) {}
 };
 
 class TargetTransformInfo;
@@ -583,11 +592,7 @@ public:
 
   /// Query the target whether it would be prefered to create a predicated
   /// vector loop, which can avoid the need to emit a scalar epilogue loop.
-  bool preferPredicateOverEpilogue(Loop *L, LoopInfo *LI, ScalarEvolution &SE,
-                                   AssumptionCache &AC, TargetLibraryInfo *TLI,
-                                   DominatorTree *DT,
-                                   LoopVectorizationLegality *LVL,
-                                   InterleavedAccessInfo *IAI) const;
+  bool preferPredicateOverEpilogue(TailFoldingInfo *TFI) const;
 
   /// Query the target what the preferred style of tail folding is.
   /// \param IVUpdateMayOverflow Tells whether it is known if the IV update
@@ -1054,6 +1059,9 @@ public:
 
   /// \return the value of vscale to tune the cost model for.
   std::optional<unsigned> getVScaleForTuning() const;
+
+  /// \return true if vscale is known to be a power of 2
+  bool isVScaleKnownToBeAPowerOfTwo() const;
 
   /// \return True if the vectorization factor should be chosen to
   /// make the vector of the smallest element type match the size of a
@@ -1700,11 +1708,7 @@ public:
                                         AssumptionCache &AC,
                                         TargetLibraryInfo *LibInfo,
                                         HardwareLoopInfo &HWLoopInfo) = 0;
-  virtual bool
-  preferPredicateOverEpilogue(Loop *L, LoopInfo *LI, ScalarEvolution &SE,
-                              AssumptionCache &AC, TargetLibraryInfo *TLI,
-                              DominatorTree *DT, LoopVectorizationLegality *LVL,
-                              InterleavedAccessInfo *IAI) = 0;
+  virtual bool preferPredicateOverEpilogue(TailFoldingInfo *TFI) = 0;
   virtual TailFoldingStyle
   getPreferredTailFoldingStyle(bool IVUpdateMayOverflow = true) = 0;
   virtual std::optional<Instruction *> instCombineIntrinsic(
@@ -1815,6 +1819,7 @@ public:
   virtual unsigned getMinVectorRegisterBitWidth() const = 0;
   virtual std::optional<unsigned> getMaxVScale() const = 0;
   virtual std::optional<unsigned> getVScaleForTuning() const = 0;
+  virtual bool isVScaleKnownToBeAPowerOfTwo() const = 0;
   virtual bool
   shouldMaximizeVectorBandwidth(TargetTransformInfo::RegisterKind K) const = 0;
   virtual ElementCount getMinimumVF(unsigned ElemWidth,
@@ -2106,12 +2111,8 @@ public:
                                 HardwareLoopInfo &HWLoopInfo) override {
     return Impl.isHardwareLoopProfitable(L, SE, AC, LibInfo, HWLoopInfo);
   }
-  bool preferPredicateOverEpilogue(Loop *L, LoopInfo *LI, ScalarEvolution &SE,
-                                   AssumptionCache &AC, TargetLibraryInfo *TLI,
-                                   DominatorTree *DT,
-                                   LoopVectorizationLegality *LVL,
-                                   InterleavedAccessInfo *IAI) override {
-    return Impl.preferPredicateOverEpilogue(L, LI, SE, AC, TLI, DT, LVL, IAI);
+  bool preferPredicateOverEpilogue(TailFoldingInfo *TFI) override {
+    return Impl.preferPredicateOverEpilogue(TFI);
   }
   TailFoldingStyle
   getPreferredTailFoldingStyle(bool IVUpdateMayOverflow = true) override {
@@ -2359,6 +2360,9 @@ public:
   }
   std::optional<unsigned> getVScaleForTuning() const override {
     return Impl.getVScaleForTuning();
+  }
+  bool isVScaleKnownToBeAPowerOfTwo() const override {
+    return Impl.isVScaleKnownToBeAPowerOfTwo();
   }
   bool shouldMaximizeVectorBandwidth(
       TargetTransformInfo::RegisterKind K) const override {

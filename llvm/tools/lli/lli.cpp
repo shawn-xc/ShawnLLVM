@@ -871,7 +871,8 @@ int runOrcJIT(const char *ProgName) {
     auto ES = std::make_unique<orc::ExecutionSession>(
         ExitOnErr(orc::SelfExecutorProcessControl::Create()));
     Builder.setLazyCallthroughManager(
-        std::make_unique<orc::LazyCallThroughManager>(*ES, 0, nullptr));
+        std::make_unique<orc::LazyCallThroughManager>(*ES, orc::ExecutorAddr(),
+                                                      nullptr));
     Builder.setExecutionSession(std::move(ES));
   }
 
@@ -937,7 +938,7 @@ int runOrcJIT(const char *ProgName) {
         L->addPlugin(std::make_unique<orc::EHFrameRegistrationPlugin>(
             ES, ExitOnErr(orc::EPCEHFrameRegistrar::Create(ES))));
         L->addPlugin(std::make_unique<orc::DebugObjectManagerPlugin>(
-            ES, ExitOnErr(orc::createJITLoaderGDBRegistrar(ES))));
+            ES, ExitOnErr(orc::createJITLoaderGDBRegistrar(ES)), true, true));
       }
       return L;
     });
@@ -1070,8 +1071,7 @@ int runOrcJIT(const char *ProgName) {
       assert(EAIdx != 0 && "ExtraArchive should have index > 0");
       auto JDItr = std::prev(IdxToDylib.lower_bound(EAIdx));
       auto &JD = *JDItr->second;
-      JD.addGenerator(ExitOnErr(orc::StaticLibraryDefinitionGenerator::Load(
-          J->getObjLinkingLayer(), EAItr->c_str())));
+      ExitOnErr(J->linkStaticLibraryInto(JD, EAItr->c_str()));
     }
   }
 

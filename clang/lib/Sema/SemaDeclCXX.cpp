@@ -1712,6 +1712,8 @@ static bool CheckConstexprDestructorSubobjects(Sema &SemaRef,
 
 /// Check whether a function's parameter types are all literal types. If so,
 /// return true. If not, produce a suitable diagnostic and return false.
+/// If any ParamDecl is null, return false without producing a diagnostic.
+/// The code creating null parameters is responsible for producing a diagnostic.
 static bool CheckConstexprParameterTypes(Sema &SemaRef,
                                          const FunctionDecl *FD,
                                          Sema::CheckConstexprKind Kind) {
@@ -1721,6 +1723,8 @@ static bool CheckConstexprParameterTypes(Sema &SemaRef,
                                               e = FT->param_type_end();
        i != e; ++i, ++ArgIndex) {
     const ParmVarDecl *PD = FD->getParamDecl(ArgIndex);
+    if (!PD)
+      return false;
     SourceLocation ParamLoc = PD->getLocation();
     if (CheckLiteralType(SemaRef, Kind, ParamLoc, *i,
                          diag::err_constexpr_non_literal_param, ArgIndex + 1,
@@ -6346,6 +6350,18 @@ void Sema::checkClassLevelDLLAttribute(CXXRecordDecl *Class) {
 
   if (!ClassAttr)
     return;
+
+  // MSVC allows imported or exported template classes that have UniqueExternal
+  // linkage. This occurs when the template class has been instantiated with
+  // a template parameter which itself has internal linkage.
+  // We drop the attribute to avoid exporting or importing any members.
+  if ((Context.getTargetInfo().getCXXABI().isMicrosoft() ||
+       Context.getTargetInfo().getTriple().isPS()) &&
+      (!Class->isExternallyVisible() && Class->hasExternalFormalLinkage())) {
+    Class->dropAttr<DLLExportAttr>();
+    Class->dropAttr<DLLImportAttr>();
+    return;
+  }
 
   if (!Class->isExternallyVisible()) {
     Diag(Class->getLocation(), diag::err_attribute_dll_not_extern)

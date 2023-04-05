@@ -56,6 +56,8 @@
 ! HELP-NEXT: -fsyntax-only          Run the preprocessor, parser and semantic analysis stages
 ! HELP-NEXT: -funderscoring         Appends one trailing underscore to external names
 ! HELP-NEXT: -fxor-operator         Enable .XOR. as a synonym of .NEQV.
+! HELP-NEXT: -gline-tables-only     Emit debug line number tables only
+! HELP-NEXT: -g                     Generate source-level debug information
 ! HELP-NEXT: -help                  Display available options
 ! HELP-NEXT: -I <dir>               Add directory to the end of the list of include search paths
 ! HELP-NEXT: -mllvm=<arg>           Alias for -mllvm
@@ -170,6 +172,8 @@
 ! HELP-FC1-NEXT: -pic-level <value>      Value for __PIC__
 ! HELP-FC1-NEXT: -plugin <name>         Use the named plugin action instead of the default action (use "help" to list available options)
 ! HELP-FC1-NEXT: -P                     Disable linemarker output in -E mode
+! HELP-FC1-NEXT: -save-temps=<value>    Save intermediate compilation results.
+! HELP-FC1-NEXT: -save-temps            Save intermediate compilation results
 ! HELP-FC1-NEXT: -std=<value>           Language standard to compile for
 ! HELP-FC1-NEXT: -S                     Only run preprocess and compilation steps
 ! HELP-FC1-NEXT: -target-cpu <value>    Target a specific cpu type

@@ -25,7 +25,7 @@ static cl::opt<unsigned> RVVRegisterWidthLMUL(
     cl::desc(
         "The LMUL to use for getRegisterBitWidth queries. Affects LMUL used "
         "by autovectorized code. Fractional LMULs are not supported."),
-    cl::init(1), cl::Hidden);
+    cl::init(2), cl::Hidden);
 
 static cl::opt<unsigned> SLPMaxVF(
     "riscv-v-slp-max-vf",
@@ -243,6 +243,16 @@ RISCVTTIImpl::getRegisterBitWidth(TargetTransformInfo::RegisterKind K) const {
   llvm_unreachable("Unsupported register kind");
 }
 
+InstructionCost
+RISCVTTIImpl::getConstantPoolLoadCost(Type *Ty,  TTI::TargetCostKind CostKind) {
+  // Add a cost of address generation + the cost of the load. The address
+  // is expected to be a PC relative offset to a constant pool entry
+  // using auipc/addi.
+  return 2 + getMemoryOpCost(Instruction::Load, Ty, DL.getABITypeAlign(Ty),
+                             /*AddressSpace=*/0, CostKind);
+}
+
+
 InstructionCost RISCVTTIImpl::getShuffleCost(TTI::ShuffleKind Kind,
                                              VectorType *Tp, ArrayRef<int> Mask,
                                              TTI::TargetCostKind CostKind,
@@ -280,7 +290,39 @@ InstructionCost RISCVTTIImpl::getShuffleCost(TTI::ShuffleKind Kind,
               return LT.first * getLMULCost(LT.second);
           }
         }
+
+        // vrgather + cost of generating the mask constant.
+        // We model this for an unknown mask with a single vrgather.
+        if (LT.first == 1 &&
+            (LT.second.getScalarSizeInBits() != 8 ||
+             LT.second.getVectorNumElements() <= 256)) {
+          VectorType *IdxTy = VectorType::get(IntegerType::getInt8Ty(Tp->getContext()),
+                                              Tp->getElementCount());
+          InstructionCost IndexCost = getConstantPoolLoadCost(IdxTy, CostKind);
+          return IndexCost + getLMULCost(LT.second);
+        }
       }
+      break;
+    }
+    case TTI::SK_Transpose:
+    case TTI::SK_PermuteTwoSrc: {
+      if (Mask.size() >= 2 && LT.second.isFixedLengthVector()) {
+        // 2 x (vrgather + cost of generating the mask constant) + cost of mask
+        // register for the second vrgather. We model this for an unknown
+        // (shuffle) mask.
+        if (LT.first == 1 &&
+            (LT.second.getScalarSizeInBits() != 8 ||
+             LT.second.getVectorNumElements() <= 256)) {
+          auto &C = Tp->getContext();
+          auto EC = Tp->getElementCount();
+          VectorType *IdxTy = VectorType::get(IntegerType::getInt8Ty(C), EC);
+          VectorType *MaskTy = VectorType::get(IntegerType::getInt1Ty(C), EC);
+          InstructionCost IndexCost = getConstantPoolLoadCost(IdxTy, CostKind);
+          InstructionCost MaskCost = getConstantPoolLoadCost(MaskTy, CostKind);
+          return 2 * IndexCost + 2 * getLMULCost(LT.second) + MaskCost;
+        }
+      }
+      break;
     }
     }
   };
@@ -292,6 +334,19 @@ InstructionCost RISCVTTIImpl::getShuffleCost(TTI::ShuffleKind Kind,
     // TODO: Most of these cases will return getInvalid in generic code, and
     // must be implemented here.
     break;
+  case TTI::SK_InsertSubvector:
+    // Example sequence:
+    // vsetivli     zero, 4, e8, mf2, tu, ma (ignored)
+    // vslideup.vi  v8, v9, 2
+    return LT.first * getLMULCost(LT.second);
+  case TTI::SK_Select: {
+    // Example sequence:
+    // li           a0, 90
+    // vsetivli     zero, 8, e8, mf2, ta, ma (ignored)
+    // vmv.s.x      v0, a0
+    // vmerge.vvm   v8, v9, v8, v0
+    return LT.first * 3 * getLMULCost(LT.second);
+  }
   case TTI::SK_Broadcast: {
     bool HasScalar = (Args.size() > 0) && (Operator::getOpcode(Args[0]) ==
                                            Instruction::InsertElement);
@@ -381,6 +436,29 @@ InstructionCost RISCVTTIImpl::getInterleavedMemoryOpCost(
   InstructionCost MemCost =
       getMemoryOpCost(Opcode, VecTy, Alignment, AddressSpace, CostKind);
   unsigned VF = FVTy->getNumElements() / Factor;
+
+  // The interleaved memory access pass will lower interleaved memory ops (i.e
+  // a load and store followed by a specific shuffle) to vlseg/vsseg
+  // intrinsics. In those cases then we can treat it as if it's just one (legal)
+  // memory op
+  if (!UseMaskForCond && !UseMaskForGaps &&
+      Factor <= TLI->getMaxSupportedInterleaveFactor()) {
+    std::pair<InstructionCost, MVT> LT = getTypeLegalizationCost(FVTy);
+    // Need to make sure type has't been scalarized
+    if (LT.second.isFixedLengthVector()) {
+      auto *LegalFVTy = FixedVectorType::get(FVTy->getElementType(),
+                                             LT.second.getVectorNumElements());
+      // FIXME: We use the memory op cost of the *legalized* type here, becuase
+      // it's getMemoryOpCost returns a really expensive cost for types like
+      // <6 x i8>, which show up when doing interleaves of Factor=3 etc.
+      // Should the memory op cost of these be cheaper?
+      if (TLI->isLegalInterleavedAccessType(LegalFVTy, Factor, DL)) {
+        InstructionCost LegalMemCost = getMemoryOpCost(
+            Opcode, LegalFVTy, Alignment, AddressSpace, CostKind);
+        return LT.first + LegalMemCost;
+      }
+    }
+  }
 
   // An interleaved load will look like this for Factor=3:
   // %wide.vec = load <12 x i32>, ptr %3, align 4
@@ -1184,11 +1262,7 @@ InstructionCost RISCVTTIImpl::getStoreImmCost(Type *Ty,
     // with how we treat scalar constants themselves just above.
     return 1;
 
-  // Add a cost of address generation + the cost of the vector load. The
-  // address is expected to be a PC relative offset to a constant pool entry
-  // using auipc/addi.
-  return 2 + getMemoryOpCost(Instruction::Load, Ty, DL.getABITypeAlign(Ty),
-                             /*AddressSpace=*/0, CostKind);
+  return getConstantPoolLoadCost(Ty, CostKind);
 }
 
 
@@ -1421,11 +1495,7 @@ InstructionCost RISCVTTIImpl::getArithmeticInstrCost(
       // scalar constants in GPRs.
       return 0;
 
-    // Add a cost of address generation + the cost of the vector load. The
-    // address is expected to be a PC relative offset to a constant pool entry
-    // using auipc/addi.
-    return 2 + getMemoryOpCost(Instruction::Load, Ty, DL.getABITypeAlign(Ty),
-                               /*AddressSpace=*/0, CostKind);
+    return getConstantPoolLoadCost(Ty, CostKind);
   };
 
   // Add the cost of materializing any constant vectors required.
@@ -1567,7 +1637,7 @@ unsigned RISCVTTIImpl::getMaximumVF(unsigned ElemWidth, unsigned Opcode) const {
 
 bool RISCVTTIImpl::isLSRCostLess(const TargetTransformInfo::LSRCost &C1,
                                  const TargetTransformInfo::LSRCost &C2) {
-  // RISCV specific here are "instruction number 1st priority".
+  // RISC-V specific here are "instruction number 1st priority".
   return std::tie(C1.Insns, C1.NumRegs, C1.AddRecCost,
                   C1.NumIVMuls, C1.NumBaseAdds,
                   C1.ScaleCost, C1.ImmCost, C1.SetupCost) <

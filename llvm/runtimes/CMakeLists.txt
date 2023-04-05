@@ -183,6 +183,10 @@ foreach(entry ${runtimes})
   if(canon_name STREQUAL "LIBC")
     list(APPEND prefixes "LLVM_LIBC")
     list(APPEND prefixes "LIBC_")
+    # The `libc` project may require '-DCUDAToolkit_ROOT' in GPU mode.
+    if(LIBC_GPU_BUILD OR LIBC_GPU_ARCHITECTURES)
+      list(APPEND prefixes "CUDA")
+    endif()
   endif()
 
   string(FIND ${projName} "lib" LIB_IDX)
@@ -385,7 +389,8 @@ if(runtimes)
       list(APPEND extra_deps llvm-link)
     endif()
   endif()
-  if("libc" IN_LIST LLVM_ENABLE_RUNTIMES AND LLVM_LIBC_FULL_BUILD)
+  if("libc" IN_LIST LLVM_ENABLE_RUNTIMES AND 
+      (LLVM_LIBC_FULL_BUILD OR LIBC_GPU_BUILD OR LIBC_GPU_ARCHITECTURES))
     if(TARGET libc-hdrgen)
       set(libc_tools libc-hdrgen)
       set(libc_cmake_args "-DLIBC_HDRGEN_EXE=$<TARGET_FILE:libc-hdrgen>"
@@ -397,6 +402,9 @@ if(runtimes)
       # This should have been done in llvm/CMakeLists.txt automatically when
       # "libc" is detected in LLVM_ENABLE_RUNTIMES.
       message(FATAL_ERROR "libc-hdrgen target missing unexpectedly")
+    endif()
+    if(LIBC_GPU_BUILD OR LIBC_GPU_ARCHITECTURES)
+      list(APPEND extra_deps clang-offload-packager nvptx-arch amdgpu-arch)
     endif()
   endif()
   if(NOT LLVM_RUNTIME_TARGETS)

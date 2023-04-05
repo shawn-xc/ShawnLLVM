@@ -208,18 +208,20 @@ Value LoopEmitter::genSparseCrd(OpBuilder &builder, Location loc, TensorId tid,
 }
 
 LoopEmitter::LoopEmitter(ValueRange tensors, StringAttr loopTag, bool hasOutput,
-                         bool isSparseOut, ArrayRef<LoopId> topSort) {
-  initialize(tensors, loopTag, hasOutput, isSparseOut, topSort);
+                         bool isSparseOut, ArrayRef<LoopId> topSort,
+                         DependentLvlGetter dimGetter) {
+  initialize(tensors, loopTag, hasOutput, isSparseOut, topSort, dimGetter);
 }
 
 void LoopEmitter::initialize(ValueRange ts, StringAttr loopTag, bool hasOutput,
-                             bool isSparseOut, ArrayRef<LoopId> topSort) {
+                             bool isSparseOut, ArrayRef<LoopId> topSort,
+                             DependentLvlGetter dimGetter) {
   // First initialize the top-level type of the fields.
   this->loopTag = loopTag;
   this->hasOutput = hasOutput;
   this->isSparseOut = isSparseOut;
 
-  const TensorId numTensors = ts.size();
+  const unsigned numTensors = ts.size();
   this->tensors.assign(ts.begin(), ts.end());
   this->lvlTypes.assign(numTensors, std::vector<DimLevelType>());
   this->lvlSizes.assign(numTensors, std::vector<Value>());
@@ -241,6 +243,9 @@ void LoopEmitter::initialize(ValueRange ts, StringAttr loopTag, bool hasOutput,
   this->loopIdToOrd.assign(numLoops, 0);
   this->loopStack.reserve(numLoops);
   this->loopSeqStack.reserve(numLoops);
+
+  this->dependentLvlMap.assign(
+      numTensors, std::vector<std::vector<std::pair<TensorId, Level>>>());
 
   // Initialize nested types of `TensorId`-indexed fields.
   for (TensorId tid = 0; tid < numTensors; tid++) {
@@ -283,6 +288,18 @@ void LoopEmitter::initialize(ValueRange ts, StringAttr loopTag, bool hasOutput,
     coordinatesBuffers[tid].assign(lvlRank, Value());
     sliceOffsets[tid].assign(lvlRank, Value());
     sliceStrides[tid].assign(lvlRank, Value());
+    dependentLvlMap[tid].assign(lvlRank,
+                                std::vector<std::pair<TensorId, Level>>());
+    if (dimGetter) {
+      auto reassoc = collapseReassoc[tid];
+      Level dstRank = reassoc ? reassoc.size() : lvlRank;
+      for (Level l = 0; l < dstRank; l++) {
+        dependentLvlMap[tid][l] = dimGetter(tid, l);
+        // TODO: View-base collapse and dependent index reduction are not
+        // compatible right now.
+        assert(!reassoc || dependentLvlMap[tid][l].empty());
+      }
+    }
   }
 
   // Construct the inverse of the `topSort` from the sparsifier.
@@ -403,8 +420,9 @@ Value LoopEmitter::genAffine(OpBuilder &builder, Location loc, AffineExpr a) {
     // level-expression, the `getPosition` must in fact be a `Dimension`.
     // However, elsewhere we have been lead to expect that `loopIdToOrd`
     // should be indexed by `LoopId`...
-    const LoopId i = a.cast<AffineDimExpr>().getPosition();
-    return loopStack[loopIdToOrd[i]].iv;
+    const auto loopId = a.cast<AffineDimExpr>().getPosition();
+    assert(loopId < loopIdToOrd.size());
+    return loopStack[loopIdToOrd[loopId]].iv;
   }
   case AffineExprKind::Add: {
     auto binOp = a.cast<AffineBinaryOpExpr>();
@@ -439,7 +457,7 @@ Operation *LoopEmitter::enterLoopOverTensorAtLvl(
   for (auto [t, l] : llvm::zip(tids, lvls)) {
     // TODO: this check for validity of the (t,l) pairs should be
     // checked/enforced at the callsites, if possible.
-    assert(t < lvlTypes.size() && l < lvlTypes[t].size());
+    assert(isValidLevel(t, l));
     assert(!coords[t][l]); // We cannot re-enter the same level
     const auto lvlTp = lvlTypes[t][l];
     const bool isSparse = isCompressedDLT(lvlTp) || isSingletonDLT(lvlTp);
@@ -555,7 +573,7 @@ Operation *LoopEmitter::enterLoopOverTensorAtLvl(
 Operation *LoopEmitter::enterFilterLoopOverTensorAtLvl(
     OpBuilder &builder, Location loc, TensorId tid, Level lvl,
     AffineExpr affine, MutableArrayRef<Value> reduc) {
-  assert(tid < lvlTypes.size() && lvl < lvlTypes[tid].size());
+  assert(isValidLevel(tid, lvl));
   assert(!affine.isa<AffineDimExpr>() && !isDenseDLT(lvlTypes[tid][lvl]));
   // We can not re-enter the same level.
   assert(!coords[tid][lvl]);
@@ -675,7 +693,7 @@ Operation *LoopEmitter::enterCoIterationOverTensorsAtLvls(
   Value cond;
   unsigned o = 0;
   for (auto [t, lvl] : llvm::zip(tids, lvls)) {
-    unsigned tid = t; // Why `t` can not be captured by lambda?
+    const TensorId tid = t; // Why `t` can not be captured by lambda?
     const auto lvlTp = lvlTypes[tid][lvl];
     if (isCompressedDLT(lvlTp) || isSingletonDLT(lvlTp)) {
       const auto reassoc = getCollapseReassociation(tid, lvl);
@@ -845,7 +863,7 @@ Operation *LoopEmitter::enterCoIterationOverTensorsAtLvls(
 
 void LoopEmitter::prepareLoopOverTensorAtLvl(OpBuilder &builder, Location loc,
                                              TensorId tid, Level dstLvl) {
-  assert(tid < lvlTypes.size() && dstLvl < lvlTypes[tid].size());
+  assert(isValidLevel(tid, dstLvl));
   const auto lvlTp = lvlTypes[tid][dstLvl];
 
   if (isDenseDLT(lvlTp))
@@ -879,10 +897,11 @@ void LoopEmitter::prepareLoopOverTensorAtLvl(OpBuilder &builder, Location loc,
       // guarantee that segHi is defined: because we only generate segHi
       // whenever coiterating, in order to improve code quality for the
       // non-coiterating cases.
-      const auto theSegHi = segHi[tid][srcLvl - 1];
-      highs[tid][srcLvl] = (!isUniqueDLT(lvlTypes[tid][srcLvl - 1]) && theSegHi)
-                               ? theSegHi
-                               : builder.create<arith::AddIOp>(loc, pLo, c1);
+      const auto parentSegHi = segHi[tid][srcLvl - 1];
+      highs[tid][srcLvl] =
+          (!isUniqueDLT(lvlTypes[tid][srcLvl - 1]) && parentSegHi)
+              ? parentSegHi
+              : builder.create<arith::AddIOp>(loc, pLo, c1);
       return;
     }
   }
@@ -997,8 +1016,8 @@ void LoopEmitter::exitForLoop(RewriterBase &rewriter, Location loc,
   }
 }
 
-void LoopEmitter::exitCoIterationLoop(OpBuilder &builder, Location loc,
-                                      MutableArrayRef<Value> reduc) {
+void LoopEmitter::exitWhileLoop(OpBuilder &builder, Location loc,
+                                MutableArrayRef<Value> reduc) {
   const LoopInfo &loopInfo = loopStack.back();
   auto whileOp = llvm::cast<scf::WhileOp>(loopInfo.loop);
   builder.setInsertionPointToEnd(loopInfo.userCodeBlock);
@@ -1082,7 +1101,7 @@ void LoopEmitter::exitCurrentLoop(RewriterBase &rewriter, Location loc,
   assert(loopInfo.tids.size() == loopInfo.lvls.size());
   SmallVector<Value> red;
   if (llvm::isa<scf::WhileOp>(loopInfo.loop)) {
-    exitCoIterationLoop(rewriter, loc, reduc);
+    exitWhileLoop(rewriter, loc, reduc);
   } else {
     exitForLoop(rewriter, loc, reduc);
   }

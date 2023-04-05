@@ -41,6 +41,8 @@
 ! CHECK-NEXT:                        Specify where to find the compiled intrinsic modules
 ! CHECK-NEXT: -flang-experimental-exec
 ! CHECK-NEXT:                        Enable support for generating executables (experimental)
+! CHECK-NEXT: -flang-experimental-hlfir
+! CHECK-NEXT:                        Use HLFIR lowering (experimental)
 ! CHECK-NEXT: -flarge-sizes          Use INTEGER(KIND=8) for the result type in size-related intrinsics
 ! CHECK-NEXT: -flogical-abbreviations Enable logical abbreviations
 ! CHECK-NEXT: -flto=<value> Set LTO mode
@@ -58,6 +60,8 @@
 ! CHECK-NEXT: -fsyntax-only          Run the preprocessor, parser and semantic analysis stages
 ! CHECK-NEXT: -funderscoring         Appends one trailing underscore to external names
 ! CHECK-NEXT: -fxor-operator         Enable .XOR. as a synonym of .NEQV.
+! CHECK-NEXT: -gline-tables-only     Emit debug line number tables only
+! CHECK-NEXT: -g                     Generate source-level debug information
 ! CHECK-NEXT: -help     Display available options
 ! CHECK-NEXT: -I <dir>               Add directory to the end of the list of include search paths
 ! CHECK-NEXT: -mllvm=<arg>           Alias for -mllvm

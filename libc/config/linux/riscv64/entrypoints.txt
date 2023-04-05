@@ -47,6 +47,7 @@ set(TARGET_LIBC_ENTRYPOINTS
     libc.src.string.strcasestr
     libc.src.string.strcat
     libc.src.string.strchr
+    libc.src.string.strchrnul
     libc.src.string.strcmp
     libc.src.string.strcoll
     libc.src.string.strcpy
@@ -370,6 +371,10 @@ if(LLVM_LIBC_FULL_BUILD)
 
     # sched.h entrypoints
     libc.src.sched.__sched_getcpucount
+
+    # setjmp.h entrypoints
+    libc.src.setjmp.longjmp
+    libc.src.setjmp.setjmp
 
     # stdio.h entrypoints
     libc.src.stdio.clearerr
