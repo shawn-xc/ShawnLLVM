@@ -5043,7 +5043,7 @@ static EvalStmtResult EvaluateSwitch(StmtResult &Result, EvalInfo &Info,
 
 static bool CheckLocalVariableDeclaration(EvalInfo &Info, const VarDecl *VD) {
   // An expression E is a core constant expression unless the evaluation of E
-  // would evaluate one of the following: [C++2b] - a control flow that passes
+  // would evaluate one of the following: [C++23] - a control flow that passes
   // through a declaration of a variable with static or thread storage duration
   // unless that variable is usable in constant expressions.
   if (VD->isLocalVarDecl() && VD->isStaticLocal() &&
@@ -10174,6 +10174,8 @@ bool RecordExprEvaluator::VisitCXXStdInitializerListExpr(
   if (!EvaluateLValue(E->getSubExpr(), Array, Info))
     return false;
 
+  assert(ArrayType && "unexpected type for array initializer");
+
   // Get a pointer to the first element of the array.
   Array.addArray(Info, E, ArrayType);
 
@@ -11719,6 +11721,18 @@ static bool convertUnsignedAPIntToCharUnits(const llvm::APInt &Int,
   return true;
 }
 
+/// If we're evaluating the object size of an instance of a struct that
+/// contains a flexible array member, add the size of the initializer.
+static void addFlexibleArrayMemberInitSize(EvalInfo &Info, const QualType &T,
+                                           const LValue &LV, CharUnits &Size) {
+  if (!T.isNull() && T->isStructureType() &&
+      T->getAsStructureType()->getDecl()->hasFlexibleArrayMember())
+    if (const auto *V = LV.getLValueBase().dyn_cast<const ValueDecl *>())
+      if (const auto *VD = dyn_cast<VarDecl>(V))
+        if (VD->hasInit())
+          Size += VD->getFlexibleArrayInitChars(Info.Ctx);
+}
+
 /// Helper for tryEvaluateBuiltinObjectSize -- Given an LValue, this will
 /// determine how many bytes exist from the beginning of the object to either
 /// the end of the current subobject, or the end of the object itself, depending
@@ -11753,7 +11767,9 @@ static bool determineEndOffset(EvalInfo &Info, SourceLocation ExprLoc,
       return false;
 
     QualType BaseTy = getObjectType(LVal.getLValueBase());
-    return CheckedHandleSizeof(BaseTy, EndOffset);
+    const bool Ret = CheckedHandleSizeof(BaseTy, EndOffset);
+    addFlexibleArrayMemberInitSize(Info, BaseTy, LVal, EndOffset);
+    return Ret;
   }
 
   // We want to evaluate the size of a subobject.
@@ -13142,12 +13158,12 @@ EvaluateComparisonBinaryOperator(EvalInfo &Info, const BinaryOperator *E,
     if (LHSValue.getDecl() && LHSValue.getDecl()->isWeak()) {
       Info.FFDiag(E, diag::note_constexpr_mem_pointer_weak_comparison)
           << LHSValue.getDecl();
-      return true;
+      return false;
     }
     if (RHSValue.getDecl() && RHSValue.getDecl()->isWeak()) {
       Info.FFDiag(E, diag::note_constexpr_mem_pointer_weak_comparison)
           << RHSValue.getDecl();
-      return true;
+      return false;
     }
 
     // C++11 [expr.eq]p2:
@@ -14839,6 +14855,7 @@ public:
     switch (E->getCastKind()) {
     default:
       return ExprEvaluatorBaseTy::VisitCastExpr(E);
+    case CK_NullToPointer:
     case CK_NonAtomicToAtomic:
       return This ? EvaluateInPlace(Result, Info, *This, E->getSubExpr())
                   : Evaluate(Result, Info, E->getSubExpr());
@@ -15353,8 +15370,16 @@ bool Expr::EvaluateAsConstantExpr(EvalResult &Result, const ASTContext &Ctx,
   LValue LVal;
   LVal.set(Base);
 
-  if (!::EvaluateInPlace(Result.Val, Info, LVal, this) || Result.HasSideEffects)
-    return false;
+  {
+    // C++23 [intro.execution]/p5
+    // A full-expression is [...] a constant-expression
+    // So we need to make sure temporary objects are destroyed after having
+    // evaluating the expression (per C++23 [class.temporary]/p4).
+    FullExpressionRAII Scope(Info);
+    if (!::EvaluateInPlace(Result.Val, Info, LVal, this) ||
+        Result.HasSideEffects || !Scope.destroy())
+      return false;
+  }
 
   if (!Info.discardCleanups())
     llvm_unreachable("Unhandled cleanup; missing full expression marker?");

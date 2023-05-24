@@ -372,6 +372,8 @@ private:
       return "ExplicitTemplateArgumentSubstitution";
     case CodeSynthesisContext::DeducedTemplateArgumentSubstitution:
       return "DeducedTemplateArgumentSubstitution";
+    case CodeSynthesisContext::LambdaExpressionSubstitution:
+      return "LambdaExpressionSubstitution";
     case CodeSynthesisContext::PriorTemplateArgumentSubstitution:
       return "PriorTemplateArgumentSubstitution";
     case CodeSynthesisContext::DefaultTemplateArgumentChecking:
@@ -882,7 +884,7 @@ void DumpModuleInfoAction::ExecuteAction() {
     }
 
     // Now let's print out any modules we did not see as part of the Primary.
-    for (auto SM : SubModMap) {
+    for (const auto &SM : SubModMap) {
       if (!SM.second.Seen && SM.second.Mod) {
         Out << "  " << ModuleKindName(SM.second.Kind) << " '" << SM.first
             << "' at index #" << SM.second.Idx

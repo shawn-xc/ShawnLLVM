@@ -73,8 +73,6 @@ CGDebugInfo::CGDebugInfo(CodeGenModule &CGM)
     : CGM(CGM), DebugKind(CGM.getCodeGenOpts().getDebugInfo()),
       DebugTypeExtRefs(CGM.getCodeGenOpts().DebugTypeExtRefs),
       DBuilder(CGM.getModule()) {
-  for (const auto &KV : CGM.getCodeGenOpts().DebugPrefixMap)
-    DebugPrefixMap[KV.first] = KV.second;
   CreateCompileUnit();
 }
 
@@ -470,12 +468,9 @@ llvm::DIFile *CGDebugInfo::createFile(
 }
 
 std::string CGDebugInfo::remapDIPath(StringRef Path) const {
-  if (DebugPrefixMap.empty())
-    return Path.str();
-
   SmallString<256> P = Path;
-  for (const auto &Entry : DebugPrefixMap)
-    if (llvm::sys::path::replace_path_prefix(P, Entry.first, Entry.second))
+  for (auto &[From, To] : llvm::reverse(CGM.getCodeGenOpts().DebugPrefixMap))
+    if (llvm::sys::path::replace_path_prefix(P, From, To))
       break;
   return P.str().str();
 }
@@ -528,6 +523,7 @@ void CGDebugInfo::CreateCompileUnit() {
   // Get absolute path name.
   SourceManager &SM = CGM.getContext().getSourceManager();
   auto &CGO = CGM.getCodeGenOpts();
+  const LangOptions &LO = CGM.getLangOpts();
   std::string MainFileName = CGO.MainFileName;
   if (MainFileName.empty())
     MainFileName = "<stdin>";
@@ -542,9 +538,15 @@ void CGDebugInfo::CreateCompileUnit() {
     MainFileDir = std::string(MainFile->getDir().getName());
     if (!llvm::sys::path::is_absolute(MainFileName)) {
       llvm::SmallString<1024> MainFileDirSS(MainFileDir);
-      llvm::sys::path::append(MainFileDirSS, MainFileName);
-      MainFileName =
-          std::string(llvm::sys::path::remove_leading_dotslash(MainFileDirSS));
+      llvm::sys::path::Style Style =
+          LO.UseTargetPathSeparator
+              ? (CGM.getTarget().getTriple().isOSWindows()
+                     ? llvm::sys::path::Style::windows_backslash
+                     : llvm::sys::path::Style::posix)
+              : llvm::sys::path::Style::native;
+      llvm::sys::path::append(MainFileDirSS, Style, MainFileName);
+      MainFileName = std::string(
+          llvm::sys::path::remove_leading_dotslash(MainFileDirSS, Style));
     }
     // If the main file name provided is identical to the input file name, and
     // if the input file is a preprocessed source, use the module name for
@@ -560,7 +562,6 @@ void CGDebugInfo::CreateCompileUnit() {
   }
 
   llvm::dwarf::SourceLanguage LangTag;
-  const LangOptions &LO = CGM.getLangOpts();
   if (LO.CPlusPlus) {
     if (LO.ObjC)
       LangTag = llvm::dwarf::DW_LANG_ObjC_plus_plus;
@@ -2556,7 +2557,11 @@ void CGDebugInfo::completeClass(const RecordDecl *RD) {
   auto I = TypeCache.find(TyPtr);
   if (I != TypeCache.end() && !cast<llvm::DIType>(I->second)->isForwardDecl())
     return;
-  llvm::DIType *Res = CreateTypeDefinition(Ty->castAs<RecordType>());
+
+  // We want the canonical definition of the structure to not
+  // be the typedef. Since that would lead to circular typedef
+  // metadata.
+  auto [Res, PrefRes] = CreateTypeDefinition(Ty->castAs<RecordType>());
   assert(!Res->isForwardDecl());
   TypeCache[TyPtr].reset(Res);
 }
@@ -2676,10 +2681,25 @@ llvm::DIType *CGDebugInfo::CreateType(const RecordType *Ty) {
     return T;
   }
 
-  return CreateTypeDefinition(Ty);
+  auto [Def, Pref] = CreateTypeDefinition(Ty);
+
+  return Pref ? Pref : Def;
 }
 
-llvm::DIType *CGDebugInfo::CreateTypeDefinition(const RecordType *Ty) {
+llvm::DIType *CGDebugInfo::GetPreferredNameType(const CXXRecordDecl *RD,
+                                                llvm::DIFile *Unit) {
+  if (!RD)
+    return nullptr;
+
+  auto const *PNA = RD->getAttr<PreferredNameAttr>();
+  if (!PNA)
+    return nullptr;
+
+  return getOrCreateType(PNA->getTypedefType(), Unit);
+}
+
+std::pair<llvm::DIType *, llvm::DIType *>
+CGDebugInfo::CreateTypeDefinition(const RecordType *Ty) {
   RecordDecl *RD = Ty->getDecl();
 
   // Get overall information about the record type for the debug info.
@@ -2695,7 +2715,7 @@ llvm::DIType *CGDebugInfo::CreateTypeDefinition(const RecordType *Ty) {
 
   const RecordDecl *D = RD->getDefinition();
   if (!D || !D->isCompleteDefinition())
-    return FwdDecl;
+    return {FwdDecl, nullptr};
 
   if (const auto *CXXDecl = dyn_cast<CXXRecordDecl>(RD))
     CollectContainingType(CXXDecl, FwdDecl);
@@ -2734,7 +2754,12 @@ llvm::DIType *CGDebugInfo::CreateTypeDefinition(const RecordType *Ty) {
         llvm::MDNode::replaceWithPermanent(llvm::TempDICompositeType(FwdDecl));
 
   RegionMap[Ty->getDecl()].reset(FwdDecl);
-  return FwdDecl;
+
+  if (CGM.getCodeGenOpts().getDebuggerTuning() == llvm::DebuggerKind::LLDB)
+    if (auto *PrefDI = GetPreferredNameType(CXXDecl, DefUnit))
+      return {FwdDecl, PrefDI};
+
+  return {FwdDecl, nullptr};
 }
 
 llvm::DIType *CGDebugInfo::CreateType(const ObjCObjectType *Ty,
@@ -3763,7 +3788,7 @@ llvm::DICompositeType *CGDebugInfo::CreateLimitedType(const RecordType *Ty) {
 void CGDebugInfo::CollectContainingType(const CXXRecordDecl *RD,
                                         llvm::DICompositeType *RealDecl) {
   // A class's primary base or the class itself contains the vtable.
-  llvm::DICompositeType *ContainingType = nullptr;
+  llvm::DIType *ContainingType = nullptr;
   const ASTRecordLayout &RL = CGM.getContext().getASTRecordLayout(RD);
   if (const CXXRecordDecl *PBase = RL.getPrimaryBase()) {
     // Seek non-virtual primary base root.
@@ -3775,9 +3800,8 @@ void CGDebugInfo::CollectContainingType(const CXXRecordDecl *RD,
       else
         break;
     }
-    ContainingType = cast<llvm::DICompositeType>(
-        getOrCreateType(QualType(PBase->getTypeForDecl(), 0),
-                        getOrCreateFile(RD->getLocation())));
+    ContainingType = getOrCreateType(QualType(PBase->getTypeForDecl(), 0),
+                                     getOrCreateFile(RD->getLocation()));
   } else if (RD->isDynamicClass())
     ContainingType = RealDecl;
 
@@ -3813,8 +3837,8 @@ void CGDebugInfo::collectFunctionDeclProps(GlobalDecl GD, llvm::DIFile *Unit,
   // subprogram name, no need to have it at all unless coverage is enabled or
   // debug is set to more than just line tables or extra debug info is needed.
   if (LinkageName == Name ||
-      (!CGM.getCodeGenOpts().EmitGcovArcs &&
-       !CGM.getCodeGenOpts().EmitGcovNotes &&
+      (CGM.getCodeGenOpts().CoverageNotesFile.empty() &&
+       CGM.getCodeGenOpts().CoverageDataFile.empty() &&
        !CGM.getCodeGenOpts().DebugInfoForProfiling &&
        !CGM.getCodeGenOpts().PseudoProbeForProfiling &&
        DebugKind <= llvm::codegenoptions::DebugLineTablesOnly))

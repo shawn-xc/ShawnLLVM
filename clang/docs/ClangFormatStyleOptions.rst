@@ -7,7 +7,7 @@
 .. raw:: html
 
       <style type="text/css">
-        .versionbadge { background-color: #1c913d; height: 20px; display: inline-block; width: 120px; text-align: center; border-radius: 5px; color: #FFFFFF; font-family: "Verdana,Geneva,DejaVu Sans,sans-serif"; }
+        .versionbadge { background-color: #1c913d; height: 20px; display: inline-block; min-width: 120px; text-align: center; border-radius: 5px; color: #FFFFFF; font-family: "Verdana,Geneva,DejaVu Sans,sans-serif"; }
       </style>
 
 .. role:: versionbadge
@@ -1829,6 +1829,41 @@ the configuration (without a prefix: ``Auto``).
                            }
 
 
+.. _BracedInitializerIndentWidth:
+
+**BracedInitializerIndentWidth** (``Unsigned``) :versionbadge:`clang-format 17` :ref:`¶ <BracedInitializerIndentWidth>`
+  The number of columns to use to indent the contents of braced init lists.
+  If unset, ``ContinuationIndentWidth`` is used.
+
+  .. code-block:: c++
+
+    AlignAfterOpenBracket: AlwaysBreak
+    BracedInitializerIndentWidth: 2
+
+    void f() {
+      SomeClass c{
+        "foo",
+        "bar",
+        "baz",
+      };
+      auto s = SomeStruct{
+        .foo = "foo",
+        .bar = "bar",
+        .baz = "baz",
+      };
+      SomeArrayT a[3] = {
+        {
+          foo,
+          bar,
+        },
+        {
+          foo,
+          bar,
+        },
+        SomeArrayT{},
+      };
+    }
+
 .. _BreakAfterAttributes:
 
 **BreakAfterAttributes** (``AttributeBreakingStyle``) :versionbadge:`clang-format 16` :ref:`¶ <BreakAfterAttributes>`
@@ -2418,7 +2453,7 @@ the configuration (without a prefix: ``Auto``).
   * ``BBCDS_Allowed`` (in configuration: ``Allowed``)
     Breaking between template declaration and ``concept`` is allowed. The
     actual behavior depends on the content and line breaking rules and
-    penalities.
+    penalties.
 
   * ``BBCDS_Always`` (in configuration: ``Always``)
     Always break before ``concept``, putting it in the line after the
@@ -3540,11 +3575,7 @@ the configuration (without a prefix: ``Auto``).
   causes the lambda body to be indented one additional level relative to
   the indentation level of the signature. ``OuterScope`` forces the lambda
   body to be indented one additional level relative to the parent scope
-  containing the lambda signature. For callback-heavy code, it may improve
-  readability to have the signature indented two levels and to use
-  ``OuterScope``. The KJ style guide requires ``OuterScope``.
-  `KJ style guide
-  <https://github.com/capnproto/capnproto/blob/master/style-guide.md>`_
+  containing the lambda signature.
 
   Possible values:
 
@@ -3568,6 +3599,11 @@ the configuration (without a prefix: ``Auto``).
            [](SomeReallyLongLambdaSignatureArgument foo) {
          return;
        });
+
+       someMethod(someOtherMethod(
+           [](SomeReallyLongLambdaSignatureArgument foo) {
+         return;
+       }));
 
 
 
@@ -4781,7 +4817,8 @@ the configuration (without a prefix: ``Auto``).
 .. _SpaceBeforeJsonColon:
 
 **SpaceBeforeJsonColon** (``Boolean``) :versionbadge:`clang-format 17` :ref:`¶ <SpaceBeforeJsonColon>`
-  If ``true``, a space will be add before a JSON colon.
+  If ``true``, a space will be added before a JSON colon. For other
+  languages, e.g. JavaScript, use ``SpacesInContainerLiterals`` instead.
 
   .. code-block:: c++
 
@@ -5032,9 +5069,12 @@ the configuration (without a prefix: ``Auto``).
   The number of spaces before trailing line comments
   (``//`` - comments).
 
-  This does not affect trailing block comments (``/*`` - comments) as
-  those commonly have different usage patterns and a number of special
-  cases.
+  This does not affect trailing block comments (``/*`` - comments) as those
+  commonly have different usage patterns and a number of special cases.  In
+  the case of Verilog, it doesn't affect a comment right after the opening
+  parenthesis in the port or parameter list in a module header, because it
+  is probably for the port on the following line instead of the parenthesis
+  it follows.
 
   .. code-block:: c++
 
@@ -5099,8 +5139,9 @@ the configuration (without a prefix: ``Auto``).
 .. _SpacesInContainerLiterals:
 
 **SpacesInContainerLiterals** (``Boolean``) :versionbadge:`clang-format 3.7` :ref:`¶ <SpacesInContainerLiterals>`
-  If ``true``, spaces are inserted inside container literals (e.g.
-  ObjC and Javascript array and dict literals).
+  If ``true``, spaces are inserted inside container literals (e.g.  ObjC and
+  Javascript array and dict literals). For JSON, use
+  ``SpaceBeforeJsonColon`` instead.
 
   .. code-block:: js
 

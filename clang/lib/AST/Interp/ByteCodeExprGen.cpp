@@ -40,7 +40,7 @@ private:
 };
 
 /// Scope used to handle initialization methods.
-template <class Emitter> class OptionScope {
+template <class Emitter> class OptionScope final {
 public:
   /// Root constructor, compiling or discarding primitives.
   OptionScope(ByteCodeExprGen<Emitter> *Ctx, bool NewDiscardResult)
@@ -92,8 +92,7 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
   case CK_FloatingCast: {
     if (!this->visit(SubExpr))
       return false;
-    const auto *TargetSemantics =
-        &Ctx.getASTContext().getFloatTypeSemantics(CE->getType());
+    const auto *TargetSemantics = &Ctx.getFloatSemantics(CE->getType());
     return this->emitCastFP(TargetSemantics, getRoundingMode(CE), CE);
   }
 
@@ -105,8 +104,7 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
     if (!this->visit(SubExpr))
       return false;
 
-    const auto *TargetSemantics =
-        &Ctx.getASTContext().getFloatTypeSemantics(CE->getType());
+    const auto *TargetSemantics = &Ctx.getFloatSemantics(CE->getType());
     llvm::RoundingMode RM = getRoundingMode(CE);
     return this->emitCastIntegralFloating(*FromT, TargetSemantics, RM, CE);
   }
@@ -148,8 +146,21 @@ bool ByteCodeExprGen<Emitter>::VisitCastExpr(const CastExpr *CE) {
     if (!this->visit(SubExpr))
       return false;
 
-    // TODO: Emit this only if FromT != ToT.
+    if (FromT == ToT)
+      return true;
+
     return this->emitCast(*FromT, *ToT, CE);
+  }
+
+  case CK_PointerToBoolean: {
+    // Just emit p != nullptr for this.
+    if (!this->visit(SubExpr))
+      return false;
+
+    if (!this->emitNullPtr(CE))
+      return false;
+
+    return this->emitNEPtr(CE);
   }
 
   case CK_ToVoid:
@@ -179,7 +190,12 @@ bool ByteCodeExprGen<Emitter>::VisitFloatingLiteral(const FloatingLiteral *E) {
 
 template <class Emitter>
 bool ByteCodeExprGen<Emitter>::VisitParenExpr(const ParenExpr *PE) {
-  return this->visit(PE->getSubExpr());
+  const Expr *SubExpr = PE->getSubExpr();
+
+  if (DiscardResult)
+    return this->discard(SubExpr);
+
+  return this->visit(SubExpr);
 }
 
 template <class Emitter>
@@ -392,7 +408,7 @@ bool ByteCodeExprGen<Emitter>::VisitImplicitValueInitExpr(const ImplicitValueIni
   if (!T)
     return false;
 
-  return this->visitZeroInitializer(*T, E);
+  return this->visitZeroInitializer(E->getType(), E);
 }
 
 template <class Emitter>
@@ -560,32 +576,8 @@ bool ByteCodeExprGen<Emitter>::VisitOpaqueValueExpr(const OpaqueValueExpr *E) {
 template <class Emitter>
 bool ByteCodeExprGen<Emitter>::VisitAbstractConditionalOperator(
     const AbstractConditionalOperator *E) {
-  const Expr *Condition = E->getCond();
-  const Expr *TrueExpr = E->getTrueExpr();
-  const Expr *FalseExpr = E->getFalseExpr();
-
-  LabelTy LabelEnd = this->getLabel();   // Label after the operator.
-  LabelTy LabelFalse = this->getLabel(); // Label for the false expr.
-
-  if (!this->visit(Condition))
-    return false;
-  if (!this->jumpFalse(LabelFalse))
-    return false;
-
-  if (!this->visit(TrueExpr))
-    return false;
-  if (!this->jump(LabelEnd))
-    return false;
-
-  this->emitLabel(LabelFalse);
-
-  if (!this->visit(FalseExpr))
-    return false;
-
-  this->fallthrough(LabelEnd);
-  this->emitLabel(LabelEnd);
-
-  return true;
+  return this->visitConditional(
+      E, [this](const Expr *E) { return this->visit(E); });
 }
 
 template <class Emitter>
@@ -625,8 +617,7 @@ bool ByteCodeExprGen<Emitter>::VisitFloatCompoundAssignOperator(
 
   // If necessary, convert LHS to its computation type.
   if (LHS->getType() != LHSComputationType) {
-    const auto *TargetSemantics =
-        &Ctx.getASTContext().getFloatTypeSemantics(LHSComputationType);
+    const auto *TargetSemantics = &Ctx.getFloatSemantics(LHSComputationType);
 
     if (!this->emitCastFP(TargetSemantics, RM, E))
       return false;
@@ -659,8 +650,7 @@ bool ByteCodeExprGen<Emitter>::VisitFloatCompoundAssignOperator(
 
   // If necessary, convert result to LHS's type.
   if (LHS->getType() != ResultType) {
-    const auto *TargetSemantics =
-        &Ctx.getASTContext().getFloatTypeSemantics(LHS->getType());
+    const auto *TargetSemantics = &Ctx.getFloatSemantics(LHS->getType());
 
     if (!this->emitCastFP(TargetSemantics, RM, E))
       return false;
@@ -810,12 +800,10 @@ bool ByteCodeExprGen<Emitter>::VisitExprWithCleanups(
   const Expr *SubExpr = E->getSubExpr();
 
   assert(E->getNumObjects() == 0 && "TODO: Implement cleanups");
-  if (!this->visit(SubExpr))
-    return false;
-
   if (DiscardResult)
-    return this->emitPopPtr(E);
-  return true;
+    return this->discard(SubExpr);
+
+  return this->visit(SubExpr);
 }
 
 template <class Emitter>
@@ -843,7 +831,7 @@ bool ByteCodeExprGen<Emitter>::VisitMaterializeTemporaryExpr(
   // For everyhing else, use local variables.
   if (SubExprT) {
     if (std::optional<unsigned> LocalIndex = allocateLocalPrimitive(
-            SubExpr, *SubExprT, /*IsMutable=*/true, /*IsExtended=*/true)) {
+            SubExpr, *SubExprT, /*IsConst=*/true, /*IsExtended=*/true)) {
       if (!this->visitInitializer(SubExpr))
         return false;
       this->emitSetLocal(*SubExprT, *LocalIndex, E);
@@ -921,8 +909,48 @@ bool ByteCodeExprGen<Emitter>::visitBool(const Expr *E) {
   }
 }
 
+/// Visit a conditional operator, i.e. `A ? B : C`.
+/// \V determines what function to call for the B and C expressions.
 template <class Emitter>
-bool ByteCodeExprGen<Emitter>::visitZeroInitializer(PrimType T, const Expr *E) {
+bool ByteCodeExprGen<Emitter>::visitConditional(
+    const AbstractConditionalOperator *E,
+    llvm::function_ref<bool(const Expr *)> V) {
+
+  const Expr *Condition = E->getCond();
+  const Expr *TrueExpr = E->getTrueExpr();
+  const Expr *FalseExpr = E->getFalseExpr();
+
+  LabelTy LabelEnd = this->getLabel();   // Label after the operator.
+  LabelTy LabelFalse = this->getLabel(); // Label for the false expr.
+
+  if (!this->visit(Condition))
+    return false;
+  if (!this->jumpFalse(LabelFalse))
+    return false;
+
+  if (!V(TrueExpr))
+    return false;
+  if (!this->jump(LabelEnd))
+    return false;
+
+  this->emitLabel(LabelFalse);
+
+  if (!V(FalseExpr))
+    return false;
+
+  this->fallthrough(LabelEnd);
+  this->emitLabel(LabelEnd);
+
+  return true;
+}
+
+template <class Emitter>
+bool ByteCodeExprGen<Emitter>::visitZeroInitializer(QualType QT,
+                                                    const Expr *E) {
+  // FIXME: We need the QualType to get the float semantics, but that means we
+  //   classify it over and over again in array situations.
+  PrimType T = classifyPrim(QT);
+
   switch (T) {
   case PT_Bool:
     return this->emitZeroBool(E);
@@ -946,8 +974,9 @@ bool ByteCodeExprGen<Emitter>::visitZeroInitializer(PrimType T, const Expr *E) {
     return this->emitNullPtr(E);
   case PT_FnPtr:
     return this->emitNullFnPtr(E);
-  case PT_Float:
-    assert(false);
+  case PT_Float: {
+    return this->emitConstFloat(APFloat::getZero(Ctx.getFloatSemantics(QT)), E);
+  }
   }
   llvm_unreachable("unknown primitive type");
 }
@@ -1267,7 +1296,7 @@ bool ByteCodeExprGen<Emitter>::visitArrayInitializer(const Expr *Initializer) {
       //   since we memset our Block*s to 0 and so we have the desired value
       //   without this.
       for (size_t I = 0; I != NumElems; ++I) {
-        if (!this->emitZero(*ElemT, Initializer))
+        if (!this->visitZeroInitializer(CAT->getElementType(), Initializer))
           return false;
         if (!this->emitInitElem(*ElemT, I, Initializer))
           return false;
@@ -1429,6 +1458,10 @@ bool ByteCodeExprGen<Emitter>::visitRecordInitializer(const Expr *Initializer) {
     return this->visitInitializer(CE->getSubExpr());
   } else if (const auto *CE = dyn_cast<CXXBindTemporaryExpr>(Initializer)) {
     return this->visitInitializer(CE->getSubExpr());
+  } else if (const auto *ACO =
+                 dyn_cast<AbstractConditionalOperator>(Initializer)) {
+    return this->visitConditional(
+        ACO, [this](const Expr *E) { return this->visitRecordInitializer(E); });
   }
 
   return false;
@@ -1549,7 +1582,11 @@ bool ByteCodeExprGen<Emitter>::visitVarDecl(const VarDecl *VD) {
   std::optional<PrimType> VarT = classify(VD->getType());
 
   if (shouldBeGloballyIndexed(VD)) {
-    std::optional<unsigned> GlobalIndex = P.getOrCreateGlobal(VD, Init);
+    // We've already seen and initialized this global.
+    if (P.getGlobal(VD))
+      return true;
+
+    std::optional<unsigned> GlobalIndex = P.createGlobal(VD, Init);
 
     if (!GlobalIndex)
       return this->bail(VD);
@@ -1741,6 +1778,11 @@ bool ByteCodeExprGen<Emitter>::VisitUnaryOperator(const UnaryOperator *E) {
       return DiscardResult ? this->emitPopPtr(E) : true;
     }
 
+    if (T == PT_Float) {
+      return DiscardResult ? this->emitIncfPop(getRoundingMode(E), E)
+                           : this->emitIncf(getRoundingMode(E), E);
+    }
+
     return DiscardResult ? this->emitIncPop(*T, E) : this->emitInc(*T, E);
   }
   case UO_PostDec: { // x--
@@ -1752,6 +1794,11 @@ bool ByteCodeExprGen<Emitter>::VisitUnaryOperator(const UnaryOperator *E) {
         return false;
 
       return DiscardResult ? this->emitPopPtr(E) : true;
+    }
+
+    if (T == PT_Float) {
+      return DiscardResult ? this->emitDecfPop(getRoundingMode(E), E)
+                           : this->emitDecf(getRoundingMode(E), E);
     }
 
     return DiscardResult ? this->emitDecPop(*T, E) : this->emitDec(*T, E);
@@ -1768,9 +1815,19 @@ bool ByteCodeExprGen<Emitter>::VisitUnaryOperator(const UnaryOperator *E) {
     }
 
     // Post-inc and pre-inc are the same if the value is to be discarded.
-    if (DiscardResult)
+    if (DiscardResult) {
+      if (T == PT_Float)
+        return this->emitIncfPop(getRoundingMode(E), E);
       return this->emitIncPop(*T, E);
+    }
 
+    if (T == PT_Float) {
+      const auto &TargetSemantics = Ctx.getFloatSemantics(E->getType());
+      this->emitLoadFloat(E);
+      this->emitConstFloat(llvm::APFloat(TargetSemantics, 1), E);
+      this->emitAddf(getRoundingMode(E), E);
+      return this->emitStoreFloat(E);
+    }
     this->emitLoad(*T, E);
     this->emitConst(1, E);
     this->emitAdd(*T, E);
@@ -1788,9 +1845,19 @@ bool ByteCodeExprGen<Emitter>::VisitUnaryOperator(const UnaryOperator *E) {
     }
 
     // Post-dec and pre-dec are the same if the value is to be discarded.
-    if (DiscardResult)
+    if (DiscardResult) {
+      if (T == PT_Float)
+        return this->emitDecfPop(getRoundingMode(E), E);
       return this->emitDecPop(*T, E);
+    }
 
+    if (T == PT_Float) {
+      const auto &TargetSemantics = Ctx.getFloatSemantics(E->getType());
+      this->emitLoadFloat(E);
+      this->emitConstFloat(llvm::APFloat(TargetSemantics, 1), E);
+      this->emitSubf(getRoundingMode(E), E);
+      return this->emitStoreFloat(E);
+    }
     this->emitLoad(*T, E);
     this->emitConst(1, E);
     this->emitSub(*T, E);
@@ -1840,6 +1907,9 @@ bool ByteCodeExprGen<Emitter>::VisitUnaryOperator(const UnaryOperator *E) {
 
 template <class Emitter>
 bool ByteCodeExprGen<Emitter>::VisitDeclRefExpr(const DeclRefExpr *E) {
+  if (DiscardResult)
+    return true;
+
   const auto *D = E->getDecl();
 
   if (const auto *ECD = dyn_cast<EnumConstantDecl>(D)) {
@@ -1866,13 +1936,13 @@ bool ByteCodeExprGen<Emitter>::VisitDeclRefExpr(const DeclRefExpr *E) {
     return this->emitGetPtrLocal(Offset, E);
   } else if (auto GlobalIndex = P.getGlobal(D)) {
     if (IsReference)
-      return this->emitGetGlobal(PT_Ptr, *GlobalIndex, E);
+      return this->emitGetGlobalPtr(*GlobalIndex, E);
 
     return this->emitGetPtrGlobal(*GlobalIndex, E);
   } else if (const auto *PVD = dyn_cast<ParmVarDecl>(D)) {
     if (auto It = this->Params.find(PVD); It != this->Params.end()) {
       if (IsReference)
-        return this->emitGetParam(PT_Ptr, It->second, E);
+        return this->emitGetParamPtr(It->second, E);
       return this->emitGetPtrParam(It->second, E);
     }
   }

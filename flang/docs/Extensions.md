@@ -99,6 +99,7 @@ end
 * `<>` as synonym for `.NE.` and `/=`
 * `$` and `@` as legal characters in names
 * Initialization in type declaration statements using `/values/`
+* Saved integer, logical and real scalars are zero initialized.
 * Kind specification with `*`, e.g. `REAL*4`
 * `DOUBLE COMPLEX` as a synonym for `COMPLEX(KIND(0.D0))` --
   but not when spelled `TYPE(DOUBLECOMPLEX)`.
@@ -112,6 +113,7 @@ end
 * Quad precision REAL literals with `Q`
 * `X` prefix/suffix as synonym for `Z` on hexadecimal literals
 * `B`, `O`, `Z`, and `X` accepted as suffixes as well as prefixes
+* Support for using bare `L` in FORMAT statement
 * Triplets allowed in array constructors
 * `%LOC`, `%VAL`, and `%REF`
 * Leading comma allowed before I/O item list
@@ -361,6 +363,7 @@ end
 * Constraint C1406, which prohibits the same module name from being used
   in a scope for both an intrinsic and a non-intrinsic module, is implemented
   as a portability warning only, not a hard error.
+* IBM @PROCESS directive is accepted but ignored.
 
 ## Preprocessing behavior
 
@@ -451,7 +454,7 @@ end
   Other Fortran compilers disagree in their interpretations of this example;
   some seem to treat the references to `m` as if they were host associations
   to an implicitly typed variable (and print `3`), while others seem to
-  treat them as references to implicitly typed local variabless, and
+  treat them as references to implicitly typed local variables, and
   load uninitialized values.
 
   In f18, we chose to emit an error message for this case since the standard

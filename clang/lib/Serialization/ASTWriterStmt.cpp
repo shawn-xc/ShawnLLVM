@@ -42,6 +42,7 @@ namespace clang {
           Code(serialization::STMT_NULL_PTR), AbbrevToUse(0) {}
 
     ASTStmtWriter(const ASTStmtWriter&) = delete;
+    ASTStmtWriter &operator=(const ASTStmtWriter &) = delete;
 
     uint64_t Emit() {
       assert(Code != serialization::STMT_NULL_PTR &&
@@ -316,7 +317,10 @@ void ASTStmtWriter::VisitGCCAsmStmt(GCCAsmStmt *S) {
     Record.AddStmt(S->getClobberStringLiteral(I));
 
   // Labels
-  for (auto *E : S->labels()) Record.AddStmt(E);
+  for (unsigned I = 0, N = S->getNumLabels(); I != N; ++I) {
+    Record.AddIdentifierRef(S->getLabelIdentifier(I));
+    Record.AddStmt(S->getLabelExpr(I));
+  }
 
   Code = serialization::STMT_GCCASM;
 }
@@ -593,6 +597,7 @@ void ASTStmtWriter::VisitPredefinedExpr(PredefinedExpr *E) {
   bool HasFunctionName = E->getFunctionName() != nullptr;
   Record.push_back(HasFunctionName);
   Record.push_back(E->getIdentKind()); // FIXME: stable encoding
+  Record.push_back(E->isTransparent());
   Record.AddSourceLocation(E->getLocation());
   if (HasFunctionName)
     Record.AddStmt(E->getFunctionName());
@@ -1087,7 +1092,7 @@ void ASTStmtWriter::VisitDesignatedInitExpr(DesignatedInitExpr *E) {
   Record.push_back(E->usesGNUSyntax());
   for (const DesignatedInitExpr::Designator &D : E->designators()) {
     if (D.isFieldDesignator()) {
-      if (FieldDecl *Field = D.getField()) {
+      if (FieldDecl *Field = D.getFieldDecl()) {
         Record.push_back(serialization::DESIG_FIELD_DECL);
         Record.AddDeclRef(Field);
       } else {
@@ -1098,13 +1103,13 @@ void ASTStmtWriter::VisitDesignatedInitExpr(DesignatedInitExpr *E) {
       Record.AddSourceLocation(D.getFieldLoc());
     } else if (D.isArrayDesignator()) {
       Record.push_back(serialization::DESIG_ARRAY);
-      Record.push_back(D.getFirstExprIndex());
+      Record.push_back(D.getArrayIndex());
       Record.AddSourceLocation(D.getLBracketLoc());
       Record.AddSourceLocation(D.getRBracketLoc());
     } else {
       assert(D.isArrayRangeDesignator() && "Unknown designator");
       Record.push_back(serialization::DESIG_ARRAY_RANGE);
-      Record.push_back(D.getFirstExprIndex());
+      Record.push_back(D.getArrayIndex());
       Record.AddSourceLocation(D.getLBracketLoc());
       Record.AddSourceLocation(D.getEllipsisLoc());
       Record.AddSourceLocation(D.getRBracketLoc());
@@ -1921,6 +1926,7 @@ ASTStmtWriter::VisitCXXUnresolvedConstructExpr(CXXUnresolvedConstructExpr *E) {
   Record.AddTypeSourceInfo(E->getTypeSourceInfo());
   Record.AddSourceLocation(E->getLParenLoc());
   Record.AddSourceLocation(E->getRParenLoc());
+  Record.push_back(E->isListInitialization());
   Code = serialization::EXPR_CXX_UNRESOLVED_CONSTRUCT;
 }
 

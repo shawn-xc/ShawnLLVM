@@ -802,7 +802,7 @@ void X86TargetInfo::getTargetDefines(const LangOptions &Opts,
   if (HasAMXFP16)
     Builder.defineMacro("__AMX_FP16__");
   if (HasAMXCOMPLEX)
-    Builder.defineMacro("__AMXCOMPLEX__");
+    Builder.defineMacro("__AMX_COMPLEX__");
   if (HasCMPCCXADD)
     Builder.defineMacro("__CMPCCXADD__");
   if (HasRAOINT)
@@ -1213,7 +1213,7 @@ bool X86TargetInfo::validateCpuIs(StringRef FeatureStr) const {
       .Default(false);
 }
 
-static unsigned matchAsmCCConstraint(const char *&Name) {
+static unsigned matchAsmCCConstraint(const char *Name) {
   auto RV = llvm::StringSwitch<unsigned>(Name)
                 .Case("@cca", 4)
                 .Case("@ccae", 5)

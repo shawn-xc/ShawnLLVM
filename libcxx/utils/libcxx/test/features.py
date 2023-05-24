@@ -26,9 +26,11 @@ def _getSuitableClangTidy(cfg):
       return None
 
     # TODO This should be the last stable release.
+    # LLVM RELEASE bump to latest stable version
     if runScriptExitCode(cfg, ['clang-tidy-16 --version']) == 0:
       return 'clang-tidy-16'
 
+    # LLVM RELEASE bump version
     if int(re.search('[0-9]+', commandOutput(cfg, ['clang-tidy --version'])).group()) >= 16:
       return 'clang-tidy'
 
@@ -240,7 +242,10 @@ for locale, alts in locales.items():
 DEFAULT_FEATURES += [
   Feature(name='darwin', when=lambda cfg: '__APPLE__' in compilerMacros(cfg)),
   Feature(name='windows', when=lambda cfg: '_WIN32' in compilerMacros(cfg)),
-  Feature(name='windows-dll', when=lambda cfg: '_WIN32' in compilerMacros(cfg) and programSucceeds(cfg, """
+  Feature(name='windows-dll', when=lambda cfg: '_WIN32' in compilerMacros(cfg) and sourceBuilds(cfg, """
+            #include <iostream>
+            int main(int, char**) { return 0; }
+          """) and programSucceeds(cfg, """
             #include <iostream>
             #include <windows.h>
             #include <winnt.h>
@@ -378,4 +383,12 @@ DEFAULT_FEATURES += [
   # not other forms of aligned allocation.
   Feature(name='availability-aligned_allocation-missing',
     when=lambda cfg: BooleanExpression.evaluate('stdlib=apple-libc++ && target={{.+}}-apple-macosx10.{{(9|10|11|12)(.0)?}}', cfg.available_features)),
+
+  # Tests that require 64-bit architecture
+  Feature(name='32-bit-pointer',
+          when=lambda cfg: sourceBuilds(cfg, """
+            int main(int, char**) {
+              static_assert(sizeof(void *) == 4);
+            }
+          """)),
 ]

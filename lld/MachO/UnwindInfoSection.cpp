@@ -307,7 +307,7 @@ void UnwindInfoSectionImpl::prepareRelocations(ConcatInputSection *isec) {
                           r.addend, /*size=*/0, /*isWeakDef=*/false,
                           /*isExternal=*/false, /*isPrivateExtern=*/false,
                           /*includeInSymtab=*/true,
-                          /*isThumb=*/false, /*isReferencedDynamically=*/false,
+                          /*isReferencedDynamically=*/false,
                           /*noDeadStrip=*/false);
         s->used = true;
         in.got->addEntry(s);
@@ -559,10 +559,10 @@ void UnwindInfoSectionImpl::finalize() {
     while (wordsRemaining >= 1 && i < cuIndices.size()) {
       idx = cuIndices[i];
       const CompactUnwindEntry *cuPtr = &cuEntries[idx];
-      if (cuPtr->functionAddress >= functionAddressMax) {
+      if (cuPtr->functionAddress >= functionAddressMax)
         break;
-      } else if (commonEncodingIndexes.count(cuPtr->encoding) ||
-                 page.localEncodingIndexes.count(cuPtr->encoding)) {
+      if (commonEncodingIndexes.count(cuPtr->encoding) ||
+          page.localEncodingIndexes.count(cuPtr->encoding)) {
         i++;
         wordsRemaining--;
       } else if (wordsRemaining >= 2 && n < COMPACT_ENCODINGS_MAX) {
