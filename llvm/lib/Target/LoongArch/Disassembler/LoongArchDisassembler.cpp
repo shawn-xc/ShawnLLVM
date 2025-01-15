@@ -10,7 +10,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include "MCTargetDesc/LoongArchBaseInfo.h"
 #include "MCTargetDesc/LoongArchMCTargetDesc.h"
 #include "TargetInfo/LoongArchTargetInfo.h"
 #include "llvm/MC/MCContext.h"
@@ -18,7 +17,6 @@
 #include "llvm/MC/MCDisassembler/MCDisassembler.h"
 #include "llvm/MC/MCInst.h"
 #include "llvm/MC/MCInstrInfo.h"
-#include "llvm/MC/MCRegisterInfo.h"
 #include "llvm/MC/MCSubtargetInfo.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Support/Endian.h"
@@ -97,6 +95,33 @@ static DecodeStatus DecodeFCSRRegisterClass(MCInst &Inst, uint64_t RegNo,
   if (RegNo >= 4)
     return MCDisassembler::Fail;
   Inst.addOperand(MCOperand::createReg(LoongArch::FCSR0 + RegNo));
+  return MCDisassembler::Success;
+}
+
+static DecodeStatus DecodeLSX128RegisterClass(MCInst &Inst, uint64_t RegNo,
+                                              uint64_t Address,
+                                              const MCDisassembler *Decoder) {
+  if (RegNo >= 32)
+    return MCDisassembler::Fail;
+  Inst.addOperand(MCOperand::createReg(LoongArch::VR0 + RegNo));
+  return MCDisassembler::Success;
+}
+
+static DecodeStatus DecodeLASX256RegisterClass(MCInst &Inst, uint64_t RegNo,
+                                               uint64_t Address,
+                                               const MCDisassembler *Decoder) {
+  if (RegNo >= 32)
+    return MCDisassembler::Fail;
+  Inst.addOperand(MCOperand::createReg(LoongArch::XR0 + RegNo));
+  return MCDisassembler::Success;
+}
+
+static DecodeStatus DecodeSCRRegisterClass(MCInst &Inst, uint64_t RegNo,
+                                           uint64_t Address,
+                                           const MCDisassembler *Decoder) {
+  if (RegNo >= 4)
+    return MCDisassembler::Fail;
+  Inst.addOperand(MCOperand::createReg(LoongArch::SCR0 + RegNo));
   return MCDisassembler::Success;
 }
 

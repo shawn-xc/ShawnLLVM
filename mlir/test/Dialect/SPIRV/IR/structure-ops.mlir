@@ -11,7 +11,7 @@ spirv.module Logical GLSL450 {
     // CHECK: [[VAR1:%.*]] = spirv.mlir.addressof @var1 : !spirv.ptr<!spirv.struct<(f32, !spirv.array<4 x f32>)>, Input>
     // CHECK-NEXT: spirv.AccessChain [[VAR1]][{{.*}}, {{.*}}] : !spirv.ptr<!spirv.struct<(f32, !spirv.array<4 x f32>)>, Input>
     %1 = spirv.mlir.addressof @var1 : !spirv.ptr<!spirv.struct<(f32, !spirv.array<4xf32>)>, Input>
-    %2 = spirv.AccessChain %1[%0, %0] : !spirv.ptr<!spirv.struct<(f32, !spirv.array<4xf32>)>, Input>, i32, i32
+    %2 = spirv.AccessChain %1[%0, %0] : !spirv.ptr<!spirv.struct<(f32, !spirv.array<4xf32>)>, Input>, i32, i32 -> !spirv.ptr<f32, Input>
     spirv.Return
   }
 }
@@ -270,6 +270,26 @@ spirv.func @baz(%arg: i32) "DontInline" attributes {
 
 // -----
 
+spirv.module Logical GLSL450 requires #spirv.vce<v1.0, [Shader, Linkage], []> {
+    // CHECK: linkage_attributes = #spirv.linkage_attributes<linkage_name = "outside.func", linkage_type = <Import>>
+    spirv.func @outside.func.with.linkage(%arg0 : i8) -> () "Pure" attributes {
+      linkage_attributes=#spirv.linkage_attributes<
+        linkage_name="outside.func",
+        linkage_type=<Import>
+      >
+    }
+    spirv.func @inside.func() -> () "Pure" attributes {} {spirv.Return}
+}
+// -----
+
+spirv.module Logical GLSL450 requires #spirv.vce<v1.0, [Shader, Linkage], []> { 
+  // expected-error @+1 {{'spirv.module' cannot contain external functions without 'Import' linkage_attributes (LinkageAttributes)}}
+  spirv.func @outside.func.without.linkage(%arg0 : i8) -> () "Pure"
+  spirv.func @inside.func() -> () "Pure" attributes {} {spirv.Return}
+}
+
+// -----
+
 // expected-error @+1 {{expected function_control attribute specified as string}}
 spirv.func @missing_function_control() { spirv.Return }
 
@@ -310,7 +330,7 @@ spirv.module Logical GLSL450 {
 // TODO: Fix test case after initialization with normal constant is addressed
 // spirv.module Logical GLSL450 {
 //   %0 = spirv.Constant 4.0 : f32
-//   // CHECK1: spirv.Variable init(%0) : !spirv.ptr<f32, Private>
+//   COM: CHECK: spirv.Variable init(%0) : !spirv.ptr<f32, Private>
 //   spirv.GlobalVariable @var1 init(%0) : !spirv.ptr<f32, Private>
 // }
 
@@ -329,6 +349,19 @@ spirv.SpecConstant @sc = 4.0 : f32
 // CHECK: spirv.GlobalVariable @var initializer(@sc)
 spirv.GlobalVariable @var initializer(@sc) : !spirv.ptr<f32, Private>
 
+
+// -----
+// Allow SpecConstantComposite as initializer
+  spirv.module Logical GLSL450 {
+  spirv.SpecConstant @sc1 = 1 : i8
+  spirv.SpecConstant @sc2 = 2 : i8
+  spirv.SpecConstant @sc3 = 3 : i8
+  spirv.SpecConstantComposite @scc (@sc1, @sc2, @sc3) : !spirv.array<3 x i8>
+
+  // CHECK: spirv.GlobalVariable @var initializer(@scc) : !spirv.ptr<!spirv.array<3 x i8>, Private>
+  spirv.GlobalVariable @var initializer(@scc) : !spirv.ptr<!spirv.array<3 x i8>, Private>
+}
+
 // -----
 
 spirv.module Logical GLSL450 {
@@ -339,7 +372,7 @@ spirv.module Logical GLSL450 {
 // TODO: Fix test case after initialization with constant is addressed
 // spirv.module Logical GLSL450 {
 //   %0 = spirv.Constant 4.0 : f32
-//   // CHECK1: spirv.GlobalVariable @var1 initializer(%0) {binding = 5 : i32} : !spirv.ptr<f32, Private>
+//   COM: CHECK: spirv.GlobalVariable @var1 initializer(%0) {binding = 5 : i32} : !spirv.ptr<f32, Private>
 //   spirv.GlobalVariable @var1 initializer(%0) {binding = 5 : i32} : !spirv.ptr<f32, Private>
 // }
 
@@ -362,6 +395,19 @@ module {
 
 // -----
 
+spirv.module Logical GLSL450 requires #spirv.vce<v1.0, [Shader, Linkage], []> {
+  // CHECK: linkage_attributes = #spirv.linkage_attributes<linkage_name = "outSideGlobalVar1", linkage_type = <Import>>
+  spirv.GlobalVariable @var1 {
+    linkage_attributes=#spirv.linkage_attributes<
+      linkage_name="outSideGlobalVar1", 
+      linkage_type=<Import>
+    >
+  } : !spirv.ptr<f32, Private>
+}
+
+
+// -----
+
 spirv.module Logical GLSL450 {
   // expected-error @+1 {{expected spirv.ptr type}}
   spirv.GlobalVariable @var0 : f32
@@ -377,7 +423,7 @@ spirv.module Logical GLSL450 {
 // -----
 
 spirv.module Logical GLSL450 {
-  // expected-error @+1 {{op initializer must be result of a spirv.SpecConstant or spirv.GlobalVariable op}}
+  // expected-error @+1 {{op initializer must be result of a spirv.SpecConstant or spirv.GlobalVariable or spirv.SpecConstantCompositeOp op}}
   spirv.GlobalVariable @var0 initializer(@var1) : !spirv.ptr<f32, Private>
 }
 
@@ -764,7 +810,7 @@ spirv.module Logical GLSL450 {
 }
 
 //===----------------------------------------------------------------------===//
-// spirv.SpecConstantComposite (spirv.coopmatrix)
+// spirv.SpecConstantComposite (spirv.KHR.coopmatrix)
 //===----------------------------------------------------------------------===//
 
 // -----
@@ -772,7 +818,7 @@ spirv.module Logical GLSL450 {
 spirv.module Logical GLSL450 {
   spirv.SpecConstant @sc1 = 1.5 : f32
   // expected-error @+1 {{unsupported composite type}}
-  spirv.SpecConstantComposite @scc (@sc1) : !spirv.coopmatrix<8x16xf32, Device>
+  spirv.SpecConstantComposite @scc (@sc1) : !spirv.coopmatrix<8x16xf32, Device, MatrixA>
 }
 
 //===----------------------------------------------------------------------===//

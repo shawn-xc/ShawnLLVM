@@ -32,19 +32,10 @@ class Function;
 class GlobalVariable;
 class Instruction;
 class LLVMContext;
-class LoopInfo;
-class PostDominatorTree;
 class StructType;
 class TargetLibraryInfo;
 class Value;
 class ValueLatticeElement;
-
-/// Helper struct for bundling up the analysis results per function for IPSCCP.
-struct AnalysisResultsForFn {
-  std::unique_ptr<PredicateInfo> PredInfo;
-  DominatorTree *DT;
-  PostDominatorTree *PDT;
-};
 
 /// Helper struct shared between Function Specialization and SCCP Solver.
 struct ArgInfo {
@@ -81,7 +72,7 @@ public:
 
   ~SCCPSolver();
 
-  void addAnalysis(Function &F, AnalysisResultsForFn A);
+  void addPredicateInfo(Function &F, DominatorTree &DT, AssumptionCache &AC);
 
   /// markBlockExecutable - This method can be used by clients to mark all of
   /// the blocks that are known to be intrinsically live in the processed unit.
@@ -89,8 +80,6 @@ public:
   bool markBlockExecutable(BasicBlock *BB);
 
   const PredicateBase *getPredicateInfoFor(Instruction *I);
-
-  DomTreeUpdater getDTU(Function &F);
 
   /// trackValueOfGlobalVariable - Clients can use this method to
   /// inform the SCCPSolver that it should track loads and stores to the
@@ -114,6 +103,8 @@ public:
   /// Returns true if the given function is in the solver's set of
   /// argument-tracked functions.
   bool isArgumentTrackedFunction(Function *F);
+
+  const SmallPtrSetImpl<Function *> &getArgumentTrackedFunctions() const;
 
   /// Solve - Solve for constants and executable blocks.
   void solve();
@@ -148,7 +139,7 @@ public:
   const ValueLatticeElement &getLatticeValueFor(Value *V) const;
 
   /// getTrackedRetVals - Get the inferred return value map.
-  const MapVector<Function *, ValueLatticeElement> &getTrackedRetVals();
+  const MapVector<Function *, ValueLatticeElement> &getTrackedRetVals() const;
 
   /// getTrackedGlobals - Get and return the set of inferred initializers for
   /// global variables.
@@ -162,6 +153,10 @@ public:
   /// works with both scalars and structs.
   void markOverdefined(Value *V);
 
+  /// trackValueOfArgument - Mark the specified argument overdefined unless it
+  /// have range attribute.  This works with both scalars and structs.
+  void trackValueOfArgument(Argument *V);
+
   // isStructLatticeConstant - Return true if all the lattice values
   // corresponding to elements of the structure are constants,
   // false otherwise.
@@ -169,13 +164,10 @@ public:
 
   /// Helper to return a Constant if \p LV is either a constant or a constant
   /// range with a single element.
-  Constant *getConstant(const ValueLatticeElement &LV) const;
+  Constant *getConstant(const ValueLatticeElement &LV, Type *Ty) const;
 
   /// Return either a Constant or nullptr for a given Value.
   Constant *getConstantOrNull(Value *V) const;
-
-  /// Return a reference to the set of argument tracked functions.
-  SmallPtrSetImpl<Function *> &getArgumentTrackedFunctions();
 
   /// Set the Lattice Value for the arguments of a specialization \p F.
   /// If an argument is Constant then its lattice value is marked with the
@@ -199,6 +191,9 @@ public:
 
   bool removeNonFeasibleEdges(BasicBlock *BB, DomTreeUpdater &DTU,
                               BasicBlock *&NewUnreachableBB) const;
+
+  void inferReturnAttributes() const;
+  void inferArgAttributes() const;
 
   bool tryToReplaceWithConstant(Value *V);
 

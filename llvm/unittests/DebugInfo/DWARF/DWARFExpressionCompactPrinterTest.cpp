@@ -62,7 +62,7 @@ void DWARFExpressionCompactPrinterTest::TestExprPrinter(
   DWARFExpression Expr(DE, 8);
 
   auto GetRegName = [&](uint64_t DwarfRegNum, bool IsEH) -> StringRef {
-    if (std::optional<unsigned> LLVMRegNum =
+    if (std::optional<MCRegister> LLVMRegNum =
             this->MRI->getLLVMRegNum(DwarfRegNum, IsEH))
       if (const char *RegName = this->MRI->getName(*LLVMRegNum))
         return llvm::StringRef(RegName);
@@ -129,6 +129,15 @@ TEST_F(DWARFExpressionCompactPrinterTest, Test_OP_nop) {
   TestExprPrinter({DW_OP_nop}, "<stack of size 0, expected 1>");
 }
 
+TEST_F(DWARFExpressionCompactPrinterTest, Test_OP_LLVM_nop) {
+  TestExprPrinter({DW_OP_LLVM_user, DW_OP_LLVM_nop},
+                  "<stack of size 0, expected 1>");
+}
+
 TEST_F(DWARFExpressionCompactPrinterTest, Test_OP_nop_OP_reg) {
   TestExprPrinter({DW_OP_nop, DW_OP_reg0}, "R0");
+}
+
+TEST_F(DWARFExpressionCompactPrinterTest, Test_OP_LLVM_nop_OP_reg) {
+  TestExprPrinter({DW_OP_LLVM_user, DW_OP_LLVM_nop, DW_OP_reg0}, "R0");
 }

@@ -27,7 +27,6 @@
 #include "llvm/MC/MCSymbol.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/EndianStream.h"
-#include "llvm/Support/raw_ostream.h"
 
 using namespace llvm;
 
@@ -49,19 +48,23 @@ public:
 
   ~RISCVMCCodeEmitter() override = default;
 
-  void encodeInstruction(const MCInst &MI, raw_ostream &OS,
+  void encodeInstruction(const MCInst &MI, SmallVectorImpl<char> &CB,
                          SmallVectorImpl<MCFixup> &Fixups,
                          const MCSubtargetInfo &STI) const override;
 
-  void expandFunctionCall(const MCInst &MI, raw_ostream &OS,
+  void expandFunctionCall(const MCInst &MI, SmallVectorImpl<char> &CB,
                           SmallVectorImpl<MCFixup> &Fixups,
                           const MCSubtargetInfo &STI) const;
 
-  void expandAddTPRel(const MCInst &MI, raw_ostream &OS,
+  void expandTLSDESCCall(const MCInst &MI, SmallVectorImpl<char> &CB,
+                         SmallVectorImpl<MCFixup> &Fixups,
+                         const MCSubtargetInfo &STI) const;
+
+  void expandAddTPRel(const MCInst &MI, SmallVectorImpl<char> &CB,
                       SmallVectorImpl<MCFixup> &Fixups,
                       const MCSubtargetInfo &STI) const;
 
-  void expandLongCondBr(const MCInst &MI, raw_ostream &OS,
+  void expandLongCondBr(const MCInst &MI, SmallVectorImpl<char> &CB,
                         SmallVectorImpl<MCFixup> &Fixups,
                         const MCSubtargetInfo &STI) const;
 
@@ -73,15 +76,15 @@ public:
 
   /// Return binary encoding of operand. If the machine operand requires
   /// relocation, record the relocation and return zero.
-  unsigned getMachineOpValue(const MCInst &MI, const MCOperand &MO,
+  uint64_t getMachineOpValue(const MCInst &MI, const MCOperand &MO,
                              SmallVectorImpl<MCFixup> &Fixups,
                              const MCSubtargetInfo &STI) const;
 
-  unsigned getImmOpValueAsr1(const MCInst &MI, unsigned OpNo,
+  uint64_t getImmOpValueAsr1(const MCInst &MI, unsigned OpNo,
                              SmallVectorImpl<MCFixup> &Fixups,
                              const MCSubtargetInfo &STI) const;
 
-  unsigned getImmOpValue(const MCInst &MI, unsigned OpNo,
+  uint64_t getImmOpValue(const MCInst &MI, unsigned OpNo,
                          SmallVectorImpl<MCFixup> &Fixups,
                          const MCSubtargetInfo &STI) const;
 
@@ -92,6 +95,10 @@ public:
   unsigned getRlistOpValue(const MCInst &MI, unsigned OpNo,
                            SmallVectorImpl<MCFixup> &Fixups,
                            const MCSubtargetInfo &STI) const;
+
+  unsigned getRegReg(const MCInst &MI, unsigned OpNo,
+                     SmallVectorImpl<MCFixup> &Fixups,
+                     const MCSubtargetInfo &STI) const;
 };
 } // end anonymous namespace
 
@@ -108,7 +115,8 @@ MCCodeEmitter *llvm::createRISCVMCCodeEmitter(const MCInstrInfo &MCII,
 // deal with it. When linker relaxation is enabled, AUIPC and JALR have a
 // chance to relax to JAL.
 // If the C extension is enabled, JAL has a chance relax to C_JAL.
-void RISCVMCCodeEmitter::expandFunctionCall(const MCInst &MI, raw_ostream &OS,
+void RISCVMCCodeEmitter::expandFunctionCall(const MCInst &MI,
+                                            SmallVectorImpl<char> &CB,
                                             SmallVectorImpl<MCFixup> &Fixups,
                                             const MCSubtargetInfo &STI) const {
   MCInst TmpInst;
@@ -116,7 +124,7 @@ void RISCVMCCodeEmitter::expandFunctionCall(const MCInst &MI, raw_ostream &OS,
   MCRegister Ra;
   if (MI.getOpcode() == RISCV::PseudoTAIL) {
     Func = MI.getOperand(0);
-    Ra = RISCV::X6;
+    Ra = RISCVII::getTailExpandUseRegNo(STI.getFeatureBits());
   } else if (MI.getOpcode() == RISCV::PseudoCALLReg) {
     Func = MI.getOperand(1);
     Ra = MI.getOperand(0).getReg();
@@ -136,7 +144,7 @@ void RISCVMCCodeEmitter::expandFunctionCall(const MCInst &MI, raw_ostream &OS,
   // Emit AUIPC Ra, Func with R_RISCV_CALL relocation type.
   TmpInst = MCInstBuilder(RISCV::AUIPC).addReg(Ra).addExpr(CallExpr);
   Binary = getBinaryCodeForInstr(TmpInst, Fixups, STI);
-  support::endian::write(OS, Binary, support::little);
+  support::endian::write(CB, Binary, llvm::endianness::little);
 
   if (MI.getOpcode() == RISCV::PseudoTAIL ||
       MI.getOpcode() == RISCV::PseudoJump)
@@ -146,11 +154,32 @@ void RISCVMCCodeEmitter::expandFunctionCall(const MCInst &MI, raw_ostream &OS,
     // Emit JALR Ra, Ra, 0
     TmpInst = MCInstBuilder(RISCV::JALR).addReg(Ra).addReg(Ra).addImm(0);
   Binary = getBinaryCodeForInstr(TmpInst, Fixups, STI);
-  support::endian::write(OS, Binary, support::little);
+  support::endian::write(CB, Binary, llvm::endianness::little);
+}
+
+void RISCVMCCodeEmitter::expandTLSDESCCall(const MCInst &MI,
+                                           SmallVectorImpl<char> &CB,
+                                           SmallVectorImpl<MCFixup> &Fixups,
+                                           const MCSubtargetInfo &STI) const {
+  MCOperand SrcSymbol = MI.getOperand(3);
+  assert(SrcSymbol.isExpr() &&
+         "Expected expression as first input to TLSDESCCALL");
+  const RISCVMCExpr *Expr = dyn_cast<RISCVMCExpr>(SrcSymbol.getExpr());
+  MCRegister Link = MI.getOperand(0).getReg();
+  MCRegister Dest = MI.getOperand(1).getReg();
+  int64_t Imm = MI.getOperand(2).getImm();
+  Fixups.push_back(MCFixup::create(
+      0, Expr, MCFixupKind(RISCV::fixup_riscv_tlsdesc_call), MI.getLoc()));
+  MCInst Call =
+      MCInstBuilder(RISCV::JALR).addReg(Link).addReg(Dest).addImm(Imm);
+
+  uint32_t Binary = getBinaryCodeForInstr(Call, Fixups, STI);
+  support::endian::write(CB, Binary, llvm::endianness::little);
 }
 
 // Expand PseudoAddTPRel to a simple ADD with the correct relocation.
-void RISCVMCCodeEmitter::expandAddTPRel(const MCInst &MI, raw_ostream &OS,
+void RISCVMCCodeEmitter::expandAddTPRel(const MCInst &MI,
+                                        SmallVectorImpl<char> &CB,
                                         SmallVectorImpl<MCFixup> &Fixups,
                                         const MCSubtargetInfo &STI) const {
   MCOperand DestReg = MI.getOperand(0);
@@ -184,7 +213,7 @@ void RISCVMCCodeEmitter::expandAddTPRel(const MCInst &MI, raw_ostream &OS,
                        .addOperand(SrcReg)
                        .addOperand(TPReg);
   uint32_t Binary = getBinaryCodeForInstr(TmpInst, Fixups, STI);
-  support::endian::write(OS, Binary, support::little);
+  support::endian::write(CB, Binary, llvm::endianness::little);
 }
 
 static unsigned getInvertedBranchOp(unsigned BrOp) {
@@ -208,7 +237,8 @@ static unsigned getInvertedBranchOp(unsigned BrOp) {
 
 // Expand PseudoLongBxx to an inverted conditional branch and an unconditional
 // jump.
-void RISCVMCCodeEmitter::expandLongCondBr(const MCInst &MI, raw_ostream &OS,
+void RISCVMCCodeEmitter::expandLongCondBr(const MCInst &MI,
+                                          SmallVectorImpl<char> &CB,
                                           SmallVectorImpl<MCFixup> &Fixups,
                                           const MCSubtargetInfo &STI) const {
   MCRegister SrcReg1 = MI.getOperand(0).getReg();
@@ -237,24 +267,29 @@ void RISCVMCCodeEmitter::expandLongCondBr(const MCInst &MI, raw_ostream &OS,
         Opcode == RISCV::PseudoLongBNE ? RISCV::C_BEQZ : RISCV::C_BNEZ;
     MCInst TmpInst = MCInstBuilder(InvOpc).addReg(SrcReg1).addImm(6);
     uint16_t Binary = getBinaryCodeForInstr(TmpInst, Fixups, STI);
-    support::endian::write<uint16_t>(OS, Binary, support::little);
+    support::endian::write<uint16_t>(CB, Binary, llvm::endianness::little);
     Offset = 2;
   } else {
     unsigned InvOpc = getInvertedBranchOp(Opcode);
     MCInst TmpInst =
         MCInstBuilder(InvOpc).addReg(SrcReg1).addReg(SrcReg2).addImm(8);
     uint32_t Binary = getBinaryCodeForInstr(TmpInst, Fixups, STI);
-    support::endian::write(OS, Binary, support::little);
+    support::endian::write(CB, Binary, llvm::endianness::little);
     Offset = 4;
   }
+
+  // Save the number fixups.
+  size_t FixupStartIndex = Fixups.size();
 
   // Emit an unconditional jump to the destination.
   MCInst TmpInst =
       MCInstBuilder(RISCV::JAL).addReg(RISCV::X0).addOperand(SrcSymbol);
   uint32_t Binary = getBinaryCodeForInstr(TmpInst, Fixups, STI);
-  support::endian::write(OS, Binary, support::little);
+  support::endian::write(CB, Binary, llvm::endianness::little);
 
-  Fixups.clear();
+  // Drop any fixup added so we can add the correct one.
+  Fixups.resize(FixupStartIndex);
+
   if (SrcSymbol.isExpr()) {
     Fixups.push_back(MCFixup::create(Offset, SrcSymbol.getExpr(),
                                      MCFixupKind(RISCV::fixup_riscv_jal),
@@ -262,7 +297,8 @@ void RISCVMCCodeEmitter::expandLongCondBr(const MCInst &MI, raw_ostream &OS,
   }
 }
 
-void RISCVMCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
+void RISCVMCCodeEmitter::encodeInstruction(const MCInst &MI,
+                                           SmallVectorImpl<char> &CB,
                                            SmallVectorImpl<MCFixup> &Fixups,
                                            const MCSubtargetInfo &STI) const {
   const MCInstrDesc &Desc = MCII.get(MI.getOpcode());
@@ -279,11 +315,11 @@ void RISCVMCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
   case RISCV::PseudoCALL:
   case RISCV::PseudoTAIL:
   case RISCV::PseudoJump:
-    expandFunctionCall(MI, OS, Fixups, STI);
+    expandFunctionCall(MI, CB, Fixups, STI);
     MCNumEmitted += 2;
     return;
   case RISCV::PseudoAddTPRel:
-    expandAddTPRel(MI, OS, Fixups, STI);
+    expandAddTPRel(MI, CB, Fixups, STI);
     MCNumEmitted += 1;
     return;
   case RISCV::PseudoLongBEQ:
@@ -292,8 +328,12 @@ void RISCVMCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
   case RISCV::PseudoLongBGE:
   case RISCV::PseudoLongBLTU:
   case RISCV::PseudoLongBGEU:
-    expandLongCondBr(MI, OS, Fixups, STI);
+    expandLongCondBr(MI, CB, Fixups, STI);
     MCNumEmitted += 2;
+    return;
+  case RISCV::PseudoTLSDESCCall:
+    expandTLSDESCCall(MI, CB, Fixups, STI);
+    MCNumEmitted += 1;
     return;
   }
 
@@ -302,12 +342,27 @@ void RISCVMCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
     llvm_unreachable("Unhandled encodeInstruction length!");
   case 2: {
     uint16_t Bits = getBinaryCodeForInstr(MI, Fixups, STI);
-    support::endian::write<uint16_t>(OS, Bits, support::little);
+    support::endian::write<uint16_t>(CB, Bits, llvm::endianness::little);
     break;
   }
   case 4: {
     uint32_t Bits = getBinaryCodeForInstr(MI, Fixups, STI);
-    support::endian::write(OS, Bits, support::little);
+    support::endian::write(CB, Bits, llvm::endianness::little);
+    break;
+  }
+  case 6: {
+    uint64_t Bits = getBinaryCodeForInstr(MI, Fixups, STI) & 0xffff'ffff'ffffu;
+    SmallVector<char, 8> Encoding;
+    support::endian::write(Encoding, Bits, llvm::endianness::little);
+    assert(Encoding[6] == 0 && Encoding[7] == 0 &&
+           "Unexpected encoding for 48-bit instruction");
+    Encoding.truncate(6);
+    CB.append(Encoding);
+    break;
+  }
+  case 8: {
+    uint64_t Bits = getBinaryCodeForInstr(MI, Fixups, STI);
+    support::endian::write(CB, Bits, llvm::endianness::little);
     break;
   }
   }
@@ -315,7 +370,7 @@ void RISCVMCCodeEmitter::encodeInstruction(const MCInst &MI, raw_ostream &OS,
   ++MCNumEmitted; // Keep track of the # of mi's emitted.
 }
 
-unsigned
+uint64_t
 RISCVMCCodeEmitter::getMachineOpValue(const MCInst &MI, const MCOperand &MO,
                                       SmallVectorImpl<MCFixup> &Fixups,
                                       const MCSubtargetInfo &STI) const {
@@ -324,20 +379,20 @@ RISCVMCCodeEmitter::getMachineOpValue(const MCInst &MI, const MCOperand &MO,
     return Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
 
   if (MO.isImm())
-    return static_cast<unsigned>(MO.getImm());
+    return MO.getImm();
 
   llvm_unreachable("Unhandled expression!");
   return 0;
 }
 
-unsigned
+uint64_t
 RISCVMCCodeEmitter::getImmOpValueAsr1(const MCInst &MI, unsigned OpNo,
                                       SmallVectorImpl<MCFixup> &Fixups,
                                       const MCSubtargetInfo &STI) const {
   const MCOperand &MO = MI.getOperand(OpNo);
 
   if (MO.isImm()) {
-    unsigned Res = MO.getImm();
+    uint64_t Res = MO.getImm();
     assert((Res & 1) == 0 && "LSB is non-zero");
     return Res >> 1;
   }
@@ -345,7 +400,7 @@ RISCVMCCodeEmitter::getImmOpValueAsr1(const MCInst &MI, unsigned OpNo,
   return getImmOpValue(MI, OpNo, Fixups, STI);
 }
 
-unsigned RISCVMCCodeEmitter::getImmOpValue(const MCInst &MI, unsigned OpNo,
+uint64_t RISCVMCCodeEmitter::getImmOpValue(const MCInst &MI, unsigned OpNo,
                                            SmallVectorImpl<MCFixup> &Fixups,
                                            const MCSubtargetInfo &STI) const {
   bool EnableRelax = STI.hasFeature(RISCV::FeatureRelax);
@@ -437,9 +492,24 @@ unsigned RISCVMCCodeEmitter::getImmOpValue(const MCInst &MI, unsigned OpNo,
       FixupKind = RISCV::fixup_riscv_call_plt;
       RelaxCandidate = true;
       break;
+    case RISCVMCExpr::VK_RISCV_TLSDESC_HI:
+      FixupKind = RISCV::fixup_riscv_tlsdesc_hi20;
+      break;
+    case RISCVMCExpr::VK_RISCV_TLSDESC_LOAD_LO:
+      FixupKind = RISCV::fixup_riscv_tlsdesc_load_lo12;
+      break;
+    case RISCVMCExpr::VK_RISCV_TLSDESC_ADD_LO:
+      FixupKind = RISCV::fixup_riscv_tlsdesc_add_lo12;
+      break;
+    case RISCVMCExpr::VK_RISCV_TLSDESC_CALL:
+      FixupKind = RISCV::fixup_riscv_tlsdesc_call;
+      break;
     }
-  } else if (Kind == MCExpr::SymbolRef &&
-             cast<MCSymbolRefExpr>(Expr)->getKind() == MCSymbolRefExpr::VK_None) {
+  } else if ((Kind == MCExpr::SymbolRef &&
+                 cast<MCSymbolRefExpr>(Expr)->getKind() ==
+                     MCSymbolRefExpr::VK_None) ||
+             Kind == MCExpr::Binary) {
+    // FIXME: Sub kind binary exprs have chance of underflow.
     if (MIFrm == RISCVII::InstFormatJ) {
       FixupKind = RISCV::fixup_riscv_jal;
     } else if (MIFrm == RISCVII::InstFormatB) {
@@ -497,6 +567,19 @@ unsigned RISCVMCCodeEmitter::getRlistOpValue(const MCInst &MI, unsigned OpNo,
   auto Imm = MO.getImm();
   assert(Imm >= 4 && "EABI is currently not implemented");
   return Imm;
+}
+
+unsigned RISCVMCCodeEmitter::getRegReg(const MCInst &MI, unsigned OpNo,
+                                       SmallVectorImpl<MCFixup> &Fixups,
+                                       const MCSubtargetInfo &STI) const {
+  const MCOperand &MO = MI.getOperand(OpNo);
+  const MCOperand &MO1 = MI.getOperand(OpNo + 1);
+  assert(MO.isReg() && MO1.isReg() && "Expected registers.");
+
+  unsigned Op = Ctx.getRegisterInfo()->getEncodingValue(MO.getReg());
+  unsigned Op1 = Ctx.getRegisterInfo()->getEncodingValue(MO1.getReg());
+
+  return Op | Op1 << 5;
 }
 
 #include "RISCVGenMCCodeEmitter.inc"

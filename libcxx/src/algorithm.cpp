@@ -19,14 +19,14 @@ void __sort(RandomAccessIterator first, RandomAccessIterator last, Comp comp) {
   // that the default comparator is in use so that we are sure that there are no
   // branches in the comparator.
   std::__introsort<_ClassicAlgPolicy,
-                   Comp&,
+                   ranges::less,
                    RandomAccessIterator,
-                   __use_branchless_sort<Comp, RandomAccessIterator>::value>(first, last, comp, depth_limit);
+                   __use_branchless_sort<ranges::less, RandomAccessIterator>>(first, last, ranges::less{}, depth_limit);
 }
 
 // clang-format off
 template void __sort<__less<char>&, char*>(char*, char*, __less<char>&);
-#ifndef _LIBCPP_HAS_NO_WIDE_CHARACTERS
+#if _LIBCPP_HAS_WIDE_CHARACTERS
 template void __sort<__less<wchar_t>&, wchar_t*>(wchar_t*, wchar_t*, __less<wchar_t>&);
 #endif
 template void __sort<__less<signed char>&, signed char*>(signed char*, signed char*, __less<signed char>&);

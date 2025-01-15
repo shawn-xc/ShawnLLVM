@@ -246,22 +246,19 @@ TEST_F(ConfigCompileTests, PathSpecMatch) {
 }
 
 TEST_F(ConfigCompileTests, DiagnosticsIncludeCleaner) {
-  // Defaults to None.
+  // Defaults to Strict.
   EXPECT_TRUE(compileAndApply());
-  EXPECT_EQ(Conf.Diagnostics.UnusedIncludes,
-            Config::IncludesPolicy::None);
+  EXPECT_EQ(Conf.Diagnostics.UnusedIncludes, Config::IncludesPolicy::Strict);
 
   Frag = {};
   Frag.Diagnostics.UnusedIncludes.emplace("None");
   EXPECT_TRUE(compileAndApply());
-  EXPECT_EQ(Conf.Diagnostics.UnusedIncludes,
-            Config::IncludesPolicy::None);
+  EXPECT_EQ(Conf.Diagnostics.UnusedIncludes, Config::IncludesPolicy::None);
 
   Frag = {};
   Frag.Diagnostics.UnusedIncludes.emplace("Strict");
   EXPECT_TRUE(compileAndApply());
-  EXPECT_EQ(Conf.Diagnostics.UnusedIncludes,
-            Config::IncludesPolicy::Strict);
+  EXPECT_EQ(Conf.Diagnostics.UnusedIncludes, Config::IncludesPolicy::Strict);
 
   Frag = {};
   EXPECT_TRUE(Conf.Diagnostics.Includes.IgnoreHeader.empty())
@@ -280,6 +277,12 @@ TEST_F(ConfigCompileTests, DiagnosticsIncludeCleaner) {
   };
   EXPECT_TRUE(HeaderFilter("foo.h"));
   EXPECT_FALSE(HeaderFilter("bar.h"));
+
+  Frag = {};
+  EXPECT_FALSE(Conf.Diagnostics.Includes.AnalyzeAngledIncludes);
+  Frag.Diagnostics.Includes.AnalyzeAngledIncludes = true;
+  EXPECT_TRUE(compileAndApply());
+  EXPECT_TRUE(Conf.Diagnostics.Includes.AnalyzeAngledIncludes);
 }
 
 TEST_F(ConfigCompileTests, DiagnosticSuppression) {
@@ -542,21 +545,44 @@ TEST_F(ConfigCompileTests, Style) {
   Frag.Style.FullyQualifiedNamespaces.push_back(std::string("bar"));
   EXPECT_TRUE(compileAndApply());
   EXPECT_THAT(Conf.Style.FullyQualifiedNamespaces, ElementsAre("foo", "bar"));
-}
 
-TEST_F(ConfigCompileTests, AllowDiagsFromStalePreamble) {
-  Frag = {};
-  EXPECT_TRUE(compileAndApply());
-  // Off by default.
-  EXPECT_EQ(Conf.Diagnostics.AllowStalePreamble, false);
+  {
+    Frag = {};
+    EXPECT_TRUE(Conf.Style.QuotedHeaders.empty())
+        << Conf.Style.QuotedHeaders.size();
+    Frag.Style.QuotedHeaders.push_back(Located<std::string>("foo.h"));
+    Frag.Style.QuotedHeaders.push_back(Located<std::string>(".*inc"));
+    EXPECT_TRUE(compileAndApply());
+    auto HeaderFilter = [this](llvm::StringRef Path) {
+      for (auto &Filter : Conf.Style.QuotedHeaders) {
+        if (Filter(Path))
+          return true;
+      }
+      return false;
+    };
+    EXPECT_TRUE(HeaderFilter("foo.h"));
+    EXPECT_TRUE(HeaderFilter("prefix/foo.h"));
+    EXPECT_FALSE(HeaderFilter("bar.h"));
+    EXPECT_FALSE(HeaderFilter("foo.h/bar.h"));
+  }
 
-  Frag.Diagnostics.AllowStalePreamble.emplace(true);
-  EXPECT_TRUE(compileAndApply());
-  EXPECT_EQ(Conf.Diagnostics.AllowStalePreamble, true);
-
-  Frag.Diagnostics.AllowStalePreamble.emplace(false);
-  EXPECT_TRUE(compileAndApply());
-  EXPECT_EQ(Conf.Diagnostics.AllowStalePreamble, false);
+  {
+    Frag = {};
+    EXPECT_TRUE(Conf.Style.AngledHeaders.empty())
+        << Conf.Style.AngledHeaders.size();
+    Frag.Style.AngledHeaders.push_back(Located<std::string>("foo.h"));
+    Frag.Style.AngledHeaders.push_back(Located<std::string>(".*inc"));
+    EXPECT_TRUE(compileAndApply());
+    auto HeaderFilter = [this](llvm::StringRef Path) {
+      for (auto &Filter : Conf.Style.AngledHeaders) {
+        if (Filter(Path))
+          return true;
+      }
+      return false;
+    };
+    EXPECT_TRUE(HeaderFilter("foo.h"));
+    EXPECT_FALSE(HeaderFilter("bar.h"));
+  }
 }
 } // namespace
 } // namespace config

@@ -89,6 +89,8 @@ public:
 
   int getAddressOfCalleeRegister() { return SystemZ::R6D; };
 
+  int getADARegister() { return SystemZ::R5D; }
+
   const MCPhysReg *getCalleeSavedRegs(const MachineFunction *MF) const final;
 
   const uint32_t *getCallPreservedMask(const MachineFunction &MF,
@@ -159,6 +161,7 @@ public:
   const MCPhysReg *getCalleeSavedRegs(const MachineFunction *MF) const override;
   const uint32_t *getCallPreservedMask(const MachineFunction &MF,
                                        CallingConv::ID CC) const override;
+  const uint32_t *getNoPreservedMask() const override;
   BitVector getReservedRegs(const MachineFunction &MF) const override;
   bool eliminateFrameIndex(MachineBasicBlock::iterator MI,
                            int SPAdj, unsigned FIOperandNum,

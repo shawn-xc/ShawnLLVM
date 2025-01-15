@@ -48,7 +48,18 @@ namespace clang {
   enum {
     LastNEONBuiltin = NEON::FirstTSBuiltin - 1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE) BI##ID,
 #include "clang/Basic/BuiltinsSVE.def"
+    FirstTSBuiltin,
+  };
+  }
+
+  namespace SME {
+  enum {
+    LastSVEBuiltin = SVE::FirstTSBuiltin - 1,
+#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#define TARGET_BUILTIN(ID, TYPE, ATTRS, FEATURE) BI##ID,
+#include "clang/Basic/BuiltinsSME.def"
     FirstTSBuiltin,
   };
   }
@@ -60,6 +71,8 @@ namespace clang {
     LastNEONBuiltin = NEON::FirstTSBuiltin - 1,
     FirstSVEBuiltin = NEON::FirstTSBuiltin,
     LastSVEBuiltin = SVE::FirstTSBuiltin - 1,
+    FirstSMEBuiltin = SVE::FirstTSBuiltin,
+    LastSMEBuiltin = SME::FirstTSBuiltin - 1,
   #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
   #include "clang/Basic/BuiltinsAArch64.def"
     LastTSBuiltin
@@ -71,7 +84,7 @@ namespace clang {
   enum {
     LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
   #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-  #include "clang/Basic/BuiltinsBPF.def"
+  #include "clang/Basic/BuiltinsBPF.inc"
     LastTSBuiltin
   };
   }
@@ -106,16 +119,26 @@ namespace clang {
   };
   }
 
+  /// SPIRV builtins
+  namespace SPIRV {
+  enum {
+    LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
+#define BUILTIN(ID, TYPE, ATTRS) BI##ID,
+#include "clang/Basic/BuiltinsSPIRV.inc"
+    LastTSBuiltin
+  };
+  } // namespace SPIRV
+
   /// X86 builtins
   namespace X86 {
   enum {
     LastTIBuiltin = clang::Builtin::FirstTSBuiltin - 1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsX86.def"
+#include "clang/Basic/BuiltinsX86.inc"
     FirstX86_64Builtin,
     LastX86CommonBuiltin = FirstX86_64Builtin - 1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsX86_64.def"
+#include "clang/Basic/BuiltinsX86_64.inc"
     LastTSBuiltin
   };
   }
@@ -146,7 +169,7 @@ namespace clang {
     FirstRVVBuiltin = clang::Builtin::FirstTSBuiltin,
     LastRVVBuiltin = RISCVVector::FirstTSBuiltin - 1,
 #define BUILTIN(ID, TYPE, ATTRS) BI##ID,
-#include "clang/Basic/BuiltinsRISCV.def"
+#include "clang/Basic/BuiltinsRISCV.inc"
     LastTSBuiltin
   };
   } // namespace RISCV
@@ -203,6 +226,35 @@ namespace clang {
     }
     bool isUnsigned() const { return (Flags & UnsignedFlag) != 0; }
     bool isQuad() const { return (Flags & QuadFlag) != 0; }
+    unsigned getEltSizeInBits() const {
+      switch (getEltType()) {
+      case Int8:
+      case Poly8:
+        return 8;
+      case Int16:
+      case Float16:
+      case Poly16:
+      case BFloat16:
+        return 16;
+      case Int32:
+      case Float32:
+        return 32;
+      case Int64:
+      case Float64:
+      case Poly64:
+        return 64;
+      case Poly128:
+        return 128;
+      }
+      llvm_unreachable("Invalid NeonTypeFlag!");
+    }
+  };
+
+  // Shared between SVE/SME and NEON
+  enum ImmCheckType {
+#define LLVM_GET_ARM_INTRIN_IMMCHECKTYPES
+#include "clang/Basic/arm_immcheck_types.inc"
+#undef LLVM_GET_ARM_INTRIN_IMMCHECKTYPES
   };
 
   /// Flags to identify the types for overloaded SVE builtins.
@@ -234,12 +286,6 @@ namespace clang {
 #define LLVM_GET_SVE_MERGETYPES
 #include "clang/Basic/arm_sve_typeflags.inc"
 #undef LLVM_GET_SVE_MERGETYPES
-    };
-
-    enum ImmCheckType {
-#define LLVM_GET_SVE_IMMCHECKTYPES
-#include "clang/Basic/arm_sve_typeflags.inc"
-#undef LLVM_GET_SVE_IMMCHECKTYPES
     };
 
     SVETypeFlags(uint64_t F) : Flags(F) {
@@ -278,7 +324,9 @@ namespace clang {
     bool isZExtReturn() const { return Flags & IsZExtReturn; }
     bool isByteIndexed() const { return Flags & IsByteIndexed; }
     bool isOverloadNone() const { return Flags & IsOverloadNone; }
-    bool isOverloadWhile() const { return Flags & IsOverloadWhile; }
+    bool isOverloadWhileOrMultiVecCvt() const {
+      return Flags & IsOverloadWhileOrMultiVecCvt;
+    }
     bool isOverloadDefault() const { return !(Flags & OverloadKindMask); }
     bool isOverloadWhileRW() const { return Flags & IsOverloadWhileRW; }
     bool isOverloadCvt() const { return Flags & IsOverloadCvt; }
@@ -294,7 +342,10 @@ namespace clang {
     bool isTupleCreate() const { return Flags & IsTupleCreate; }
     bool isTupleGet() const { return Flags & IsTupleGet; }
     bool isTupleSet() const { return Flags & IsTupleSet; }
-
+    bool isReadZA() const { return Flags & IsReadZA; }
+    bool isWriteZA() const { return Flags & IsWriteZA; }
+    bool setsFPMR() const { return Flags & SetsFPMR; }
+    bool isReductionQV() const { return Flags & IsReductionQV; }
     uint64_t getBits() const { return Flags; }
     bool isFlagSet(uint64_t Flag) const { return Flags & Flag; }
   };

@@ -16,6 +16,65 @@
 
 include "mlir/IR/OpBase.td"
 
+def FloatTypeInterface : TypeInterface<"FloatType"> {
+  let cppNamespace = "::mlir";
+  let description = [{
+    This type interface should be implemented by all floating-point types. It
+    defines the LLVM APFloat semantics and provides a few helper functions.
+  }];
+
+  let methods = [
+    InterfaceMethod<
+      /*desc=*/[{
+        Returns the APFloat semantics for this floating-point type.
+      }],
+      /*retTy=*/"const ::llvm::fltSemantics &",
+      /*methodName=*/"getFloatSemantics",
+      /*args=*/(ins)
+    >,
+    InterfaceMethod<
+      /*desc=*/[{
+        Returns a float type with bitwidth scaled by `scale`. Returns a "null"
+        float type if the scaled element type cannot be represented.
+      }],
+      /*retTy=*/"::mlir::FloatType",
+      /*methodName=*/"scaleElementBitwidth",
+      /*args=*/(ins "unsigned":$scale),
+      /*methodBody=*/"",
+      /*defaultImplementation=*/"return ::mlir::FloatType();"
+    >
+  ];
+
+  let extraClassDeclaration = [{
+    // Convenience factories.
+    static FloatType getBF16(MLIRContext *ctx);
+    static FloatType getF16(MLIRContext *ctx);
+    static FloatType getF32(MLIRContext *ctx);
+    static FloatType getTF32(MLIRContext *ctx);
+    static FloatType getF64(MLIRContext *ctx);
+    static FloatType getF80(MLIRContext *ctx);
+    static FloatType getF128(MLIRContext *ctx);
+    static FloatType getFloat8E5M2(MLIRContext *ctx);
+    static FloatType getFloat8E4M3(MLIRContext *ctx);
+    static FloatType getFloat8E4M3FN(MLIRContext *ctx);
+    static FloatType getFloat8E5M2FNUZ(MLIRContext *ctx);
+    static FloatType getFloat8E4M3FNUZ(MLIRContext *ctx);
+    static FloatType getFloat8E4M3B11FNUZ(MLIRContext *ctx);
+    static FloatType getFloat8E3M4(MLIRContext *ctx);
+    static FloatType getFloat4E2M1FN(MLIRContext *ctx);
+    static FloatType getFloat6E2M3FN(MLIRContext *ctx);
+    static FloatType getFloat6E3M2FN(MLIRContext *ctx);
+    static FloatType getFloat8E8M0FNU(MLIRContext *ctx);
+
+    /// Return the bitwidth of this float type.
+    unsigned getWidth();
+
+    /// Return the width of the mantissa of this type.
+    /// The width includes the integer bit.
+    unsigned getFPMantissaWidth();
+  }];
+}
+
 //===----------------------------------------------------------------------===//
 // MemRefElementTypeInterface
 //===----------------------------------------------------------------------===//
@@ -59,8 +118,13 @@ def ShapedTypeInterface : TypeInterface<"ShapedType"> {
   }];
   let methods = [
     InterfaceMethod<[{
-      Returns a clone of this type with the given shape and element
-      type. If a shape is not provided, the current shape of the type is used.
+      Returns a clone of this type with the given shape and element type.
+
+      If no shape is provided, the shape of this type is used. In that case, if
+      this type is unranked, so is the resulting type.
+
+      If a shape is provided, the resulting type is always ranked, even if this
+      type is unranked.
     }],
     "::mlir::ShapedType", "cloneWith", (ins
       "::std::optional<::llvm::ArrayRef<int64_t>>":$shape,
@@ -89,7 +153,7 @@ def ShapedTypeInterface : TypeInterface<"ShapedType"> {
 
     /// Whether the given dimension size indicates a dynamic dimension.
     static constexpr bool isDynamic(int64_t dValue) {
-	return dValue == kDynamic;
+      return dValue == kDynamic;
     }
 
     /// Whether the given shape has any size that indicates a dynamic dimension.
@@ -99,18 +163,24 @@ def ShapedTypeInterface : TypeInterface<"ShapedType"> {
 
     /// Return the number of elements present in the given shape.
     static int64_t getNumElements(ArrayRef<int64_t> shape);
+
+    /// Return a clone of this type with the given new shape and element type.
+    /// The returned type is ranked, even if this type is unranked.
+    auto clone(::llvm::ArrayRef<int64_t> shape, Type elementType) {
+      return cloneWith(shape, elementType);
+    }
+
+    /// Return a clone of this type with the given new shape. The returned type
+    /// is ranked, even if this type is unranked.
+    auto clone(::llvm::ArrayRef<int64_t> shape) {
+      return cloneWith(shape, getElementType());
+    }
   }];
 
   let extraSharedClassDeclaration = [{
-    /// Return a clone of this type with the given new shape and element type.
-    auto clone(::llvm::ArrayRef<int64_t> shape, Type elementType) {
-      return $_type.cloneWith(shape, elementType);
-    }
-    /// Return a clone of this type with the given new shape.
-    auto clone(::llvm::ArrayRef<int64_t> shape) {
-      return $_type.cloneWith(shape, $_type.getElementType());
-    }
-    /// Return a clone of this type with the given new element type.
+    /// Return a clone of this type with the given new element type. The
+    /// returned type is ranked if and only if this type is ranked. In that
+    /// case, the returned type has the same shape as this type.
     auto clone(::mlir::Type elementType) {
       return $_type.cloneWith(/*shape=*/std::nullopt, elementType);
     }
@@ -155,7 +225,7 @@ def ShapedTypeInterface : TypeInterface<"ShapedType"> {
 
     /// If this is a ranked type, return the number of dimensions with dynamic
     /// size. Otherwise, abort.
-    int64_t getNumDynamicDims() const {
+    size_t getNumDynamicDims() const {
       return llvm::count_if($_type.getShape(), ::mlir::ShapedType::isDynamic);
     }
 

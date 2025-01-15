@@ -1,6 +1,8 @@
 get_property(dialect_libs GLOBAL PROPERTY MLIR_DIALECT_LIBS)
+get_property(extension_libs GLOBAL PROPERTY MLIR_EXTENSION_LIBS)
 
 set(LIBS
+  CUFDialect
   FIRBuilder
   FIRCodeGen
   FIRDialect
@@ -8,6 +10,7 @@ set(LIBS
   FIRSupport
   HLFIRDialect
   ${dialect_libs}
+  ${extension_libs}
   LLVMTargetParser
 )
 
@@ -22,6 +25,7 @@ add_flang_unittest(FlangOptimizerTests
   Builder/Runtime/CommandTest.cpp
   Builder/Runtime/CharacterTest.cpp
   Builder/Runtime/DerivedTest.cpp
+  Builder/Runtime/IntrinsicsTest.cpp
   Builder/Runtime/NumericTest.cpp
   Builder/Runtime/RaggedTest.cpp
   Builder/Runtime/ReductionTest.cpp
@@ -34,6 +38,7 @@ add_flang_unittest(FlangOptimizerTests
   KindMappingTest.cpp
   RTBuilder.cpp
 DEPENDS
+  CUFDialect
   FIRDialect
   FIRSupport
   HLFIRDialect

@@ -19,6 +19,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "llvm/Transforms/IPO/Internalize.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/ADT/StringSet.h"
 #include "llvm/Analysis/CallGraph.h"
@@ -175,7 +176,7 @@ void InternalizePass::checkComdat(
   if (!C)
     return;
 
-  ComdatInfo &Info = ComdatMap.try_emplace(C).first->second;
+  ComdatInfo &Info = ComdatMap[C];
   ++Info.Size;
   if (shouldPreserveGV(GV))
     Info.External = true;

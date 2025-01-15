@@ -59,8 +59,8 @@ LangStandard::Kind standardFromOpts(const LangOptions &LO) {
       return LangStandard::lang_cxx11;
     return LangStandard::lang_cxx98;
   }
-  if (LO.C2x)
-    return LangStandard::lang_c2x;
+  if (LO.C23)
+    return LangStandard::lang_c23;
   // C17 has no new features, so treat {C11,C17} as C17.
   if (LO.C11)
     return LangStandard::lang_c17;
@@ -87,7 +87,6 @@ std::string buildUmbrella(llvm::StringLiteral Mandatory,
                         "#endif\n",
                         Header);
   }
-  OS.flush();
   return Result;
 }
 
@@ -167,7 +166,7 @@ SymbolSlab filter(SymbolSlab Slab, const StdLibLocation &Loc) {
         R.first->second = llvm::any_of(
             StdLibURIPrefixes,
             [&, URIStr(llvm::StringRef(URI))](const std::string &Prefix) {
-              return URIStr.startswith(Prefix);
+              return URIStr.starts_with(Prefix);
             });
       }
     }
@@ -207,7 +206,7 @@ SymbolSlab indexStandardLibrary(llvm::StringRef HeaderSources,
   }
   const FrontendInputFile &Input = CI->getFrontendOpts().Inputs.front();
   trace::Span Tracer("StandardLibraryIndex");
-  LangStandard::Kind LangStd = standardFromOpts(*CI->getLangOpts());
+  LangStandard::Kind LangStd = standardFromOpts(CI->getLangOpts());
   log("Indexing {0} standard library in the context of {1}",
       LangStandard::getLangStandardForKind(LangStd).getName(), Input.getFile());
 
@@ -267,7 +266,7 @@ SymbolSlab indexStandardLibrary(llvm::StringRef HeaderSources,
 SymbolSlab indexStandardLibrary(std::unique_ptr<CompilerInvocation> Invocation,
                                 const StdLibLocation &Loc,
                                 const ThreadsafeFS &TFS) {
-  llvm::StringRef Header = getStdlibUmbrellaHeader(*Invocation->getLangOpts());
+  llvm::StringRef Header = getStdlibUmbrellaHeader(Invocation->getLangOpts());
   return indexStandardLibrary(Header, std::move(Invocation), Loc, TFS);
 }
 
@@ -314,7 +313,7 @@ std::optional<StdLibLocation> StdLibSet::add(const LangOptions &LO,
        llvm::make_range(HS.search_dir_begin(), HS.search_dir_end())) {
     switch (DL.getLookupType()) {
     case DirectoryLookup::LT_NormalDir: {
-      Path = DL.getDir()->getName();
+      Path = DL.getDirRef()->getName();
       llvm::sys::path::append(Path, ProbeHeader);
       llvm::vfs::Status Stat;
       if (!HS.getFileMgr().getNoncachedStatValue(Path, Stat) &&

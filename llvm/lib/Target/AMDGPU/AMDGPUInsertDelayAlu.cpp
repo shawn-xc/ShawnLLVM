@@ -30,7 +30,7 @@ public:
   const SIInstrInfo *SII;
   const TargetRegisterInfo *TRI;
 
-  TargetSchedModel SchedModel;
+  const TargetSchedModel *SchedModel;
 
   AMDGPUInsertDelayAlu() : MachineFunctionPass(ID) {}
 
@@ -51,7 +51,7 @@ public:
         MI.getOpcode() == AMDGPU::S_SENDMSG_RTN_B64)
       return true;
     if (MI.getOpcode() == AMDGPU::S_WAITCNT_DEPCTR &&
-        (MI.getOperand(0).getImm() & 0xf000) == 0)
+        AMDGPU::DepCtr::decodeFieldVaVdst(MI.getOperand(0).getImm()) == 0)
       return true;
     return false;
   }
@@ -368,11 +368,11 @@ public:
             // ignore this operand.
             if (MI.getOpcode() == AMDGPU::V_WRITELANE_B32 && Op.isTied())
               continue;
-            for (MCRegUnitIterator UI(Op.getReg(), TRI); UI.isValid(); ++UI) {
-              auto It = State.find(*UI);
+            for (MCRegUnit Unit : TRI->regunits(Op.getReg())) {
+              auto It = State.find(Unit);
               if (It != State.end()) {
                 Delay.merge(It->second);
-                State.erase(*UI);
+                State.erase(Unit);
               }
             }
           }
@@ -387,10 +387,10 @@ public:
       if (Type != OTHER) {
         // TODO: Scan implicit defs too?
         for (const auto &Op : MI.defs()) {
-          unsigned Latency = SchedModel.computeOperandLatency(
+          unsigned Latency = SchedModel->computeOperandLatency(
               &MI, Op.getOperandNo(), nullptr, 0);
-          for (MCRegUnitIterator UI(Op.getReg(), TRI); UI.isValid(); ++UI)
-            State[*UI] = DelayInfo(Type, Latency);
+          for (MCRegUnit Unit : TRI->regunits(Op.getReg()))
+            State[Unit] = DelayInfo(Type, Latency);
         }
       }
 
@@ -429,8 +429,7 @@ public:
 
     SII = ST.getInstrInfo();
     TRI = ST.getRegisterInfo();
-
-    SchedModel.init(&ST);
+    SchedModel = &SII->getSchedModel();
 
     // Calculate the delay state for each basic block, iterating until we reach
     // a fixed point.

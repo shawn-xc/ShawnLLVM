@@ -702,13 +702,13 @@ def int_arm_neon_vld4 : DefaultAttrsIntrinsic<
 
 def int_arm_neon_vld1x2 : DefaultAttrsIntrinsic<
     [llvm_anyvector_ty, LLVMMatchType<0>],
-    [LLVMAnyPointerType<LLVMMatchType<0>>], [IntrReadMem, IntrArgMemOnly]>;
+    [llvm_anyptr_ty], [IntrReadMem, IntrArgMemOnly]>;
 def int_arm_neon_vld1x3 : DefaultAttrsIntrinsic<
     [llvm_anyvector_ty, LLVMMatchType<0>, LLVMMatchType<0>],
-    [LLVMAnyPointerType<LLVMMatchType<0>>], [IntrReadMem, IntrArgMemOnly]>;
+    [llvm_anyptr_ty], [IntrReadMem, IntrArgMemOnly]>;
 def int_arm_neon_vld1x4 : DefaultAttrsIntrinsic<
     [llvm_anyvector_ty, LLVMMatchType<0>, LLVMMatchType<0>, LLVMMatchType<0>],
-    [LLVMAnyPointerType<LLVMMatchType<0>>], [IntrReadMem, IntrArgMemOnly]>;
+    [llvm_anyptr_ty], [IntrReadMem, IntrArgMemOnly]>;
 
 // Vector load N-element structure to one lane.
 // Source operands are: the address, the N input vectors (since only one
@@ -1362,6 +1362,7 @@ def int_arm_mve_vqmovn_predicated: DefaultAttrsIntrinsic<[llvm_anyvector_ty],
     llvm_i32_ty /* unsigned output */, llvm_i32_ty /* unsigned input */,
     llvm_i32_ty /* top half */, llvm_anyvector_ty /* pred */], [IntrNoMem]>;
 
+// fma_predicated returns the add operand for disabled lanes.
 def int_arm_mve_fma_predicated: DefaultAttrsIntrinsic<[llvm_anyvector_ty],
    [LLVMMatchType<0> /* mult op #1 */, LLVMMatchType<0> /* mult op #2 */,
     LLVMMatchType<0> /* addend */, llvm_anyvector_ty /* pred */], [IntrNoMem]>;

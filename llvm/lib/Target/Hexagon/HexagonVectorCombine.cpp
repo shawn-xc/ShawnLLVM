@@ -21,6 +21,7 @@
 #include "llvm/Analysis/AssumptionCache.h"
 #include "llvm/Analysis/InstSimplifyFolder.h"
 #include "llvm/Analysis/InstructionSimplify.h"
+#include "llvm/Analysis/ScalarEvolutionExpressions.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/Analysis/ValueTracking.h"
 #include "llvm/Analysis/VectorUtils.h"
@@ -58,15 +59,23 @@
 using namespace llvm;
 
 namespace {
-cl::opt<bool> AlignFullHvxStores("hvc-align-full-hvx-stores", cl::Hidden);
+cl::opt<bool> DumpModule("hvc-dump-module", cl::Hidden);
+cl::opt<bool> VAEnabled("hvc-va", cl::Hidden, cl::init(true)); // Align
+cl::opt<bool> VIEnabled("hvc-vi", cl::Hidden, cl::init(true)); // Idioms
+cl::opt<bool> VADoFullStores("hvc-va-full-stores", cl::Hidden);
+
+cl::opt<unsigned> VAGroupCountLimit("hvc-va-group-count-limit", cl::Hidden,
+                                    cl::init(~0));
+cl::opt<unsigned> VAGroupSizeLimit("hvc-va-group-size-limit", cl::Hidden,
+                                   cl::init(~0));
 
 class HexagonVectorCombine {
 public:
   HexagonVectorCombine(Function &F_, AliasAnalysis &AA_, AssumptionCache &AC_,
-                       DominatorTree &DT_, TargetLibraryInfo &TLI_,
-                       const TargetMachine &TM_)
-      : F(F_), DL(F.getParent()->getDataLayout()), AA(AA_), AC(AC_), DT(DT_),
-        TLI(TLI_),
+                       DominatorTree &DT_, ScalarEvolution &SE_,
+                       TargetLibraryInfo &TLI_, const TargetMachine &TM_)
+      : F(F_), DL(F.getDataLayout()), AA(AA_), AC(AC_), DT(DT_),
+        SE(SE_), TLI(TLI_),
         HST(static_cast<const HexagonSubtarget &>(*TM_.getSubtargetImpl(F))) {}
 
   bool run();
@@ -133,8 +142,8 @@ public:
 
   Value *createHvxIntrinsic(IRBuilderBase &Builder, Intrinsic::ID IntID,
                             Type *RetTy, ArrayRef<Value *> Args,
-                            ArrayRef<Type *> ArgTys = std::nullopt,
-                            ArrayRef<Value *> MDSources = std::nullopt) const;
+                            ArrayRef<Type *> ArgTys = {},
+                            ArrayRef<Value *> MDSources = {}) const;
   SmallVector<Value *> splitVectorElements(IRBuilderBase &Builder, Value *Vec,
                                            unsigned ToWidth) const;
   Value *joinVectorElements(IRBuilderBase &Builder, ArrayRef<Value *> Values,
@@ -162,6 +171,7 @@ public:
   AliasAnalysis &AA;
   AssumptionCache &AC;
   DominatorTree &DT;
+  ScalarEvolution &SE;
   TargetLibraryInfo &TLI;
   const HexagonSubtarget &HST;
 
@@ -192,7 +202,7 @@ public:
 
 private:
   using InstList = std::vector<Instruction *>;
-  using InstMap = DenseMap<Instruction*, Instruction*>;
+  using InstMap = DenseMap<Instruction *, Instruction *>;
 
   struct AddrInfo {
     AddrInfo(const AddrInfo &) = default;
@@ -223,6 +233,7 @@ private:
   struct MoveGroup {
     MoveGroup(const AddrInfo &AI, Instruction *B, bool Hvx, bool Load)
         : Base(B), Main{AI.Inst}, Clones{}, IsHvx(Hvx), IsLoad(Load) {}
+    MoveGroup() = default;
     Instruction *Base; // Base instruction of the parent address group.
     InstList Main;     // Main group of instructions.
     InstList Deps;     // List of dependencies.
@@ -299,32 +310,32 @@ private:
   Value *getPassThrough(Value *Val) const;
 
   Value *createAdjustedPointer(IRBuilderBase &Builder, Value *Ptr, Type *ValTy,
-                               int Adjust) const;
+                               int Adjust,
+                               const InstMap &CloneMap = InstMap()) const;
   Value *createAlignedPointer(IRBuilderBase &Builder, Value *Ptr, Type *ValTy,
-                              int Alignment) const;
+                              int Alignment,
+                              const InstMap &CloneMap = InstMap()) const;
 
   Value *createLoad(IRBuilderBase &Builder, Type *ValTy, Value *Ptr,
                     Value *Predicate, int Alignment, Value *Mask,
-                    Value *PassThru,
-                    ArrayRef<Value *> MDSources = std::nullopt) const;
+                    Value *PassThru, ArrayRef<Value *> MDSources = {}) const;
   Value *createSimpleLoad(IRBuilderBase &Builder, Type *ValTy, Value *Ptr,
                           int Alignment,
-                          ArrayRef<Value *> MDSources = std::nullopt) const;
+                          ArrayRef<Value *> MDSources = {}) const;
 
   Value *createStore(IRBuilderBase &Builder, Value *Val, Value *Ptr,
                      Value *Predicate, int Alignment, Value *Mask,
-                     ArrayRef<Value *> MDSources = std ::nullopt) const;
+                     ArrayRef<Value *> MDSources = {}) const;
   Value *createSimpleStore(IRBuilderBase &Builder, Value *Val, Value *Ptr,
                            int Alignment,
-                           ArrayRef<Value *> MDSources = std ::nullopt) const;
+                           ArrayRef<Value *> MDSources = {}) const;
 
   Value *createPredicatedLoad(IRBuilderBase &Builder, Type *ValTy, Value *Ptr,
                               Value *Predicate, int Alignment,
-                              ArrayRef<Value *> MDSources = std::nullopt) const;
-  Value *
-  createPredicatedStore(IRBuilderBase &Builder, Value *Val, Value *Ptr,
-                        Value *Predicate, int Alignment,
-                        ArrayRef<Value *> MDSources = std::nullopt) const;
+                              ArrayRef<Value *> MDSources = {}) const;
+  Value *createPredicatedStore(IRBuilderBase &Builder, Value *Val, Value *Ptr,
+                               Value *Predicate, int Alignment,
+                               ArrayRef<Value *> MDSources = {}) const;
 
   DepList getUpwardDeps(Instruction *In, Instruction *Base) const;
   bool createAddressGroups();
@@ -372,6 +383,12 @@ raw_ostream &operator<<(raw_ostream &OS, const AlignVectors::MoveGroup &MG) {
   OS << "Deps\n";
   for (Instruction *I : MG.Deps)
     OS << "  " << *I << '\n';
+  OS << "Clones\n";
+  for (auto [K, V] : MG.Clones) {
+    OS << "    ";
+    K->printAsOperand(OS, false);
+    OS << "\t-> " << *V << '\n';
+  }
   return OS;
 }
 
@@ -662,35 +679,32 @@ auto AlignVectors::getPassThrough(Value *Val) const -> Value * {
 }
 
 auto AlignVectors::createAdjustedPointer(IRBuilderBase &Builder, Value *Ptr,
-                                         Type *ValTy, int Adjust) const
+                                         Type *ValTy, int Adjust,
+                                         const InstMap &CloneMap) const
     -> Value * {
-  // The adjustment is in bytes, but if it's a multiple of the type size,
-  // we don't need to do pointer casts.
-  auto *PtrTy = cast<PointerType>(Ptr->getType());
-  if (!PtrTy->isOpaque()) {
-    Type *ElemTy = PtrTy->getNonOpaquePointerElementType();
-    int ElemSize = HVC.getSizeOf(ElemTy, HVC.Alloc);
-    if (Adjust % ElemSize == 0 && Adjust != 0) {
-      Value *Tmp0 = Builder.CreateGEP(
-          ElemTy, Ptr, HVC.getConstInt(Adjust / ElemSize), "gep");
-      return Builder.CreatePointerCast(Tmp0, ValTy->getPointerTo(), "cst");
-    }
-  }
-
-  PointerType *CharPtrTy = Type::getInt8PtrTy(HVC.F.getContext());
-  Value *Tmp0 = Builder.CreatePointerCast(Ptr, CharPtrTy, "cst");
-  Value *Tmp1 = Builder.CreateGEP(Type::getInt8Ty(HVC.F.getContext()), Tmp0,
-                                  HVC.getConstInt(Adjust), "gep");
-  return Builder.CreatePointerCast(Tmp1, ValTy->getPointerTo(), "cst");
+  if (auto *I = dyn_cast<Instruction>(Ptr))
+    if (Instruction *New = CloneMap.lookup(I))
+      Ptr = New;
+  return Builder.CreatePtrAdd(Ptr, HVC.getConstInt(Adjust), "gep");
 }
 
 auto AlignVectors::createAlignedPointer(IRBuilderBase &Builder, Value *Ptr,
-                                        Type *ValTy, int Alignment) const
+                                        Type *ValTy, int Alignment,
+                                        const InstMap &CloneMap) const
     -> Value * {
+  auto remap = [&](Value *V) -> Value * {
+    if (auto *I = dyn_cast<Instruction>(V)) {
+      for (auto [Old, New] : CloneMap)
+        I->replaceUsesOfWith(Old, New);
+      return I;
+    }
+    return V;
+  };
   Value *AsInt = Builder.CreatePtrToInt(Ptr, HVC.getIntTy(), "pti");
   Value *Mask = HVC.getConstInt(-Alignment);
-  Value *And = Builder.CreateAnd(AsInt, Mask, "add");
-  return Builder.CreateIntToPtr(And, ValTy->getPointerTo(), "itp");
+  Value *And = Builder.CreateAnd(remap(AsInt), Mask, "and");
+  return Builder.CreateIntToPtr(
+      And, PointerType::getUnqual(ValTy->getContext()), "itp");
 }
 
 auto AlignVectors::createLoad(IRBuilderBase &Builder, Type *ValTy, Value *Ptr,
@@ -751,8 +765,8 @@ auto AlignVectors::createPredicatedLoad(IRBuilderBase &Builder, Type *ValTy,
   auto V6_vL32b_pred_ai = HVC.HST.getIntrinsicId(Hexagon::V6_vL32b_pred_ai);
   // FIXME: This may not put the offset from Ptr into the vmem offset.
   return HVC.createHvxIntrinsic(Builder, V6_vL32b_pred_ai, ValTy,
-                                {Predicate, Ptr, HVC.getConstInt(0)},
-                                std::nullopt, MDSources);
+                                {Predicate, Ptr, HVC.getConstInt(0)}, {},
+                                MDSources);
 }
 
 auto AlignVectors::createStore(IRBuilderBase &Builder, Value *Val, Value *Ptr,
@@ -822,8 +836,8 @@ auto AlignVectors::createPredicatedStore(IRBuilderBase &Builder, Value *Val,
   auto V6_vS32b_pred_ai = HVC.HST.getIntrinsicId(Hexagon::V6_vS32b_pred_ai);
   // FIXME: This may not put the offset from Ptr into the vmem offset.
   return HVC.createHvxIntrinsic(Builder, V6_vS32b_pred_ai, nullptr,
-                                {Predicate, Ptr, HVC.getConstInt(0), Val},
-                                std::nullopt, MDSources);
+                                {Predicate, Ptr, HVC.getConstInt(0), Val}, {},
+                                MDSources);
 }
 
 auto AlignVectors::getUpwardDeps(Instruction *In, Instruction *Base) const
@@ -908,9 +922,14 @@ auto AlignVectors::createLoadGroups(const AddrList &Group) const -> MoveList {
   // Form load groups.
   // To avoid complications with moving code across basic blocks, only form
   // groups that are contained within a single basic block.
+  unsigned SizeLimit = VAGroupSizeLimit;
+  if (SizeLimit == 0)
+    return {};
 
   auto tryAddTo = [&](const AddrInfo &Info, MoveGroup &Move) {
     assert(!Move.Main.empty() && "Move group should have non-empty Main");
+    if (Move.Main.size() >= SizeLimit)
+      return false;
     // Don't mix HVX and non-HVX instructions.
     if (Move.IsHvx != isHvx(Info))
       return false;
@@ -958,9 +977,14 @@ auto AlignVectors::createStoreGroups(const AddrList &Group) const -> MoveList {
   // Form store groups.
   // To avoid complications with moving code across basic blocks, only form
   // groups that are contained within a single basic block.
+  unsigned SizeLimit = VAGroupSizeLimit;
+  if (SizeLimit == 0)
+    return {};
 
   auto tryAddTo = [&](const AddrInfo &Info, MoveGroup &Move) {
     assert(!Move.Main.empty() && "Move group should have non-empty Main");
+    if (Move.Main.size() >= SizeLimit)
+      return false;
     // For stores with return values we'd have to collect downward depenencies.
     // There are no such stores that we handle at the moment, so omit that.
     assert(Info.Inst->getType()->isVoidTy() &&
@@ -1000,7 +1024,7 @@ auto AlignVectors::createStoreGroups(const AddrList &Group) const -> MoveList {
   // Erase groups where every store is a full HVX vector. The reason is that
   // aligning predicated stores generates complex code that may be less
   // efficient than a sequence of unaligned vector stores.
-  if (!AlignFullHvxStores) {
+  if (!VADoFullStores) {
     erase_if(StoreGroups, [this](const MoveGroup &G) {
       return G.IsHvx && llvm::all_of(G.Main, [this](Instruction *S) {
                auto MaybeInfo = this->getAddrInfo(*S);
@@ -1028,7 +1052,7 @@ auto AlignVectors::moveTogether(MoveGroup &Move) const -> bool {
     for (Instruction *M : Main) {
       if (M != Where)
         M->moveAfter(Where);
-      for (auto [Old, New]: Move.Clones)
+      for (auto [Old, New] : Move.Clones)
         M->replaceUsesOfWith(Old, New);
       Where = M;
     }
@@ -1084,7 +1108,8 @@ auto AlignVectors::realignLoadGroup(IRBuilderBase &Builder,
   auto *True = HVC.getFullValue(HVC.getBoolTy(ScLen));
   auto *Undef = UndefValue::get(SecTy);
 
-  SmallVector<Instruction *> Loads(NumSectors + DoAlign, nullptr);
+  // Created load does not have to be "Instruction" (e.g. "undef").
+  SmallVector<Value *> Loads(NumSectors + DoAlign, nullptr);
 
   // We could create all of the aligned loads, and generate the valigns
   // at the location of the first load, but for large load groups, this
@@ -1171,9 +1196,8 @@ auto AlignVectors::realignLoadGroup(IRBuilderBase &Builder,
     // from source sections of twice the load width.
     int Start = (Index - DoAlign) * ScLen;
     int Width = (1 + DoAlign) * ScLen;
-    Value *Load = this->createLoad(Builder, SecTy, Ptr, Predicate, ScLen, True,
-                                   Undef, VSpan.section(Start, Width).values());
-    return cast<Instruction>(Load);
+    return this->createLoad(Builder, SecTy, Ptr, Predicate, ScLen, True, Undef,
+                            VSpan.section(Start, Width).values());
   };
 
   auto moveBefore = [this](Instruction *In, Instruction *To) {
@@ -1210,8 +1234,10 @@ auto AlignVectors::realignLoadGroup(IRBuilderBase &Builder,
       // If not, then the load needs to be placed at BasePos.
       // We can't do this check proactively because we need the load to exist
       // in order to check legality.
-      if (!HVC.isSafeToMoveBeforeInBB(*Loads[Index], BasePos))
-        moveBefore(Loads[Index], &*BasePos);
+      if (auto *Load = dyn_cast<Instruction>(Loads[Index])) {
+        if (!HVC.isSafeToMoveBeforeInBB(*Load, BasePos))
+          moveBefore(Load, &*BasePos);
+      }
       LLVM_DEBUG(dbgs() << "Loads[" << Index << "]:" << *Loads[Index] << '\n');
     }
   }
@@ -1305,20 +1331,32 @@ auto AlignVectors::realignStoreGroup(IRBuilderBase &Builder,
     // Adjust the store offsets relative to the section start offset.
     ByteSpan VSection =
         VSpan.section(Index * ScLen, ScLen).shift(-Index * ScLen);
-    Value *AccumV = UndefValue::get(SecTy);
-    Value *AccumM = HVC.getNullValue(SecTy);
+    Value *Undef = UndefValue::get(SecTy);
+    Value *Zero = HVC.getNullValue(SecTy);
+    Value *AccumV = Undef;
+    Value *AccumM = Zero;
     for (ByteSpan::Block &S : VSection) {
       Value *Pay = getPayload(S.Seg.Val);
       Value *Mask = HVC.rescale(Builder, MakeVec(Builder, getMask(S.Seg.Val)),
                                 Pay->getType(), HVC.getByteTy());
-      AccumM = HVC.insertb(Builder, AccumM, HVC.vbytes(Builder, Mask),
-                           S.Seg.Start, S.Seg.Size, S.Pos);
-      AccumV = HVC.insertb(Builder, AccumV, HVC.vbytes(Builder, Pay),
-                           S.Seg.Start, S.Seg.Size, S.Pos);
+      Value *PartM = HVC.insertb(Builder, Zero, HVC.vbytes(Builder, Mask),
+                                 S.Seg.Start, S.Seg.Size, S.Pos);
+      AccumM = Builder.CreateOr(AccumM, PartM);
+
+      Value *PartV = HVC.insertb(Builder, Undef, HVC.vbytes(Builder, Pay),
+                                 S.Seg.Start, S.Seg.Size, S.Pos);
+
+      AccumV = Builder.CreateSelect(
+          Builder.CreateICmp(CmpInst::ICMP_NE, PartM, Zero), PartV, AccumV);
     }
     ASpanV.Blocks.emplace_back(AccumV, ScLen, Index * ScLen);
     ASpanM.Blocks.emplace_back(AccumM, ScLen, Index * ScLen);
   }
+
+  LLVM_DEBUG({
+    dbgs() << "ASpanV before vlalign:\n" << ASpanV << '\n';
+    dbgs() << "ASpanM before vlalign:\n" << ASpanM << '\n';
+  });
 
   // vlalign
   if (DoAlign) {
@@ -1330,6 +1368,11 @@ auto AlignVectors::realignStoreGroup(IRBuilderBase &Builder,
       ASpanM[Index - 1].Seg.Val = HVC.vlalignb(Builder, PrevM, ThisM, AlignVal);
     }
   }
+
+  LLVM_DEBUG({
+    dbgs() << "ASpanV after vlalign:\n" << ASpanV << '\n';
+    dbgs() << "ASpanM after vlalign:\n" << ASpanM << '\n';
+  });
 
   auto createStore = [&](IRBuilderBase &Builder, const ByteSpan &ASpanV,
                          const ByteSpan &ASpanM, int Index, bool MakePred) {
@@ -1366,9 +1409,9 @@ auto AlignVectors::realignGroup(const MoveGroup &Move) const -> bool {
   // Return the element with the maximum alignment from Range,
   // where GetValue obtains the value to compare from an element.
   auto getMaxOf = [](auto Range, auto GetValue) {
-    return *std::max_element(
-        Range.begin(), Range.end(),
-        [&GetValue](auto &A, auto &B) { return GetValue(A) < GetValue(B); });
+    return *llvm::max_element(Range, [&GetValue](auto &A, auto &B) {
+      return GetValue(A) < GetValue(B);
+    });
   };
 
   const AddrList &BaseInfos = AddrGroups.at(Move.Base);
@@ -1431,7 +1474,7 @@ auto AlignVectors::realignGroup(const MoveGroup &Move) const -> bool {
     // of potential bitcasts to i8*.
     int Adjust = -alignTo(OffAtMax - Start, MinNeeded.value());
     AlignAddr = createAdjustedPointer(Builder, WithMaxAlign.Addr,
-                                      WithMaxAlign.ValTy, Adjust);
+                                      WithMaxAlign.ValTy, Adjust, Move.Clones);
     int Diff = Start - (OffAtMax + Adjust);
     AlignVal = HVC.getConstInt(Diff);
     assert(Diff >= 0);
@@ -1444,26 +1487,21 @@ auto AlignVectors::realignGroup(const MoveGroup &Move) const -> bool {
     // the alignment amount.
     // Do an explicit down-alignment of the address to avoid creating an
     // aligned instruction with an address that is not really aligned.
-    AlignAddr = createAlignedPointer(Builder, WithMinOffset.Addr,
-                                     WithMinOffset.ValTy, MinNeeded.value());
+    AlignAddr =
+        createAlignedPointer(Builder, WithMinOffset.Addr, WithMinOffset.ValTy,
+                             MinNeeded.value(), Move.Clones);
     AlignVal =
         Builder.CreatePtrToInt(WithMinOffset.Addr, HVC.getIntTy(), "pti");
+    if (auto *I = dyn_cast<Instruction>(AlignVal)) {
+      for (auto [Old, New] : Move.Clones)
+        I->replaceUsesOfWith(Old, New);
+    }
   }
 
   ByteSpan VSpan;
   for (const AddrInfo &AI : MoveInfos) {
     VSpan.Blocks.emplace_back(AI.Inst, HVC.getSizeOf(AI.ValTy),
                               AI.Offset - WithMinOffset.Offset);
-  }
-
-  // Update the AlignAddr/AlignVal to use cloned dependencies.
-  if (auto *I = dyn_cast<Instruction>(AlignAddr)) {
-    for (auto [Old, New] : Move.Clones)
-      I->replaceUsesOfWith(Old, New);
-  }
-  if (auto *I = dyn_cast<Instruction>(AlignVal)) {
-    for (auto [Old, New] : Move.Clones)
-      I->replaceUsesOfWith(Old, New);
   }
 
   // The aligned loads/stores will use blocks that are either scalars,
@@ -1495,8 +1533,8 @@ auto AlignVectors::realignGroup(const MoveGroup &Move) const -> bool {
 auto AlignVectors::makeTestIfUnaligned(IRBuilderBase &Builder, Value *AlignVal,
                                        int Alignment) const -> Value * {
   auto *AlignTy = AlignVal->getType();
-  Value *And =
-      Builder.CreateAnd(AlignVal, ConstantInt::get(AlignTy, Alignment - 1));
+  Value *And = Builder.CreateAnd(
+      AlignVal, ConstantInt::get(AlignTy, Alignment - 1), "and");
   Value *Zero = ConstantInt::get(AlignTy, 0);
   return Builder.CreateICmpNE(And, Zero, "isz");
 }
@@ -1511,7 +1549,8 @@ auto AlignVectors::isSectorTy(Type *Ty) const -> bool {
 }
 
 auto AlignVectors::run() -> bool {
-  LLVM_DEBUG(dbgs() << "Running HVC::AlignVectors\n");
+  LLVM_DEBUG(dbgs() << "Running HVC::AlignVectors on " << HVC.F.getName()
+                    << '\n');
   if (!createAddressGroups())
     return false;
 
@@ -1539,6 +1578,20 @@ auto AlignVectors::run() -> bool {
     for (const MoveGroup &G : StoreGroups)
       dbgs() << G << "\n";
   });
+
+  // Cumulative limit on the number of groups.
+  unsigned CountLimit = VAGroupCountLimit;
+  if (CountLimit == 0)
+    return false;
+
+  if (LoadGroups.size() > CountLimit) {
+    LoadGroups.resize(CountLimit);
+    StoreGroups.clear();
+  } else {
+    unsigned StoreLimit = CountLimit - LoadGroups.size();
+    if (StoreGroups.size() > StoreLimit)
+      StoreGroups.resize(StoreLimit);
+  }
 
   for (auto &M : LoadGroups)
     Changed |= moveTogether(M);
@@ -2099,13 +2152,22 @@ auto HvxIdioms::run() -> bool {
 // --- End HvxIdioms
 
 auto HexagonVectorCombine::run() -> bool {
-  if (!HST.useHVXOps())
-    return false;
+  if (DumpModule)
+    dbgs() << "Module before HexagonVectorCombine\n" << *F.getParent();
 
   bool Changed = false;
-  Changed |= AlignVectors(*this).run();
-  Changed |= HvxIdioms(*this).run();
+  if (HST.useHVXOps()) {
+    if (VAEnabled)
+      Changed |= AlignVectors(*this).run();
+    if (VIEnabled)
+      Changed |= HvxIdioms(*this).run();
+  }
 
+  if (DumpModule) {
+    dbgs() << "Module " << (Changed ? "(modified)" : "(unchanged)")
+           << " after HexagonVectorCombine\n"
+           << *F.getParent();
+  }
   return Changed;
 }
 
@@ -2328,9 +2390,9 @@ auto HexagonVectorCombine::vralignb(IRBuilderBase &Builder, Value *Lo,
     Type *Int64Ty = Type::getInt64Ty(F.getContext());
     Value *Lo64 = Builder.CreateBitCast(Lo, Int64Ty, "cst");
     Value *Hi64 = Builder.CreateBitCast(Hi, Int64Ty, "cst");
-    Function *FI = Intrinsic::getDeclaration(F.getParent(),
-                                             Intrinsic::hexagon_S2_valignrb);
-    Value *Call = Builder.CreateCall(FI, {Hi64, Lo64, Amt}, "cup");
+    Value *Call = Builder.CreateIntrinsic(Intrinsic::hexagon_S2_valignrb, {},
+                                          {Hi64, Lo64, Amt},
+                                          /*FMFSource=*/nullptr, "cup");
     return Builder.CreateBitCast(Call, Lo->getType(), "cst");
   }
   llvm_unreachable("Unexpected vector length");
@@ -2525,12 +2587,12 @@ auto HexagonVectorCombine::createHvxIntrinsic(IRBuilderBase &Builder,
     unsigned HwLen = HST.getVectorLength();
     Intrinsic::ID TC = HwLen == 64 ? Intrinsic::hexagon_V6_pred_typecast
                                    : Intrinsic::hexagon_V6_pred_typecast_128B;
-    Function *FI =
-        Intrinsic::getDeclaration(F.getParent(), TC, {DestTy, Val->getType()});
-    return Builder.CreateCall(FI, {Val}, "cup");
+    return Builder.CreateIntrinsic(TC, {DestTy, Val->getType()}, {Val},
+                                   /*FMFSource=*/nullptr, "cup");
   };
 
-  Function *IntrFn = Intrinsic::getDeclaration(F.getParent(), IntID, ArgTys);
+  Function *IntrFn =
+      Intrinsic::getOrInsertDeclaration(F.getParent(), IntID, ArgTys);
   FunctionType *IntrTy = IntrFn->getFunctionType();
 
   SmallVector<Value *, 4> IntrArgs;
@@ -2627,7 +2689,7 @@ auto HexagonVectorCombine::joinVectorElements(IRBuilderBase &Builder,
   // joins, the shuffles will hopefully be folded into a perfect shuffle.
   // The output will need to be sign-extended to a type with element width
   // being a power-of-2 anyways.
-  SmallVector<Value *> Inputs(Values.begin(), Values.end());
+  SmallVector<Value *> Inputs(Values);
 
   unsigned ToWidth = ToType->getScalarSizeInBits();
   unsigned Width = Inputs.front()->getType()->getScalarSizeInBits();
@@ -2662,6 +2724,16 @@ auto HexagonVectorCombine::joinVectorElements(IRBuilderBase &Builder,
 auto HexagonVectorCombine::calculatePointerDifference(Value *Ptr0,
                                                       Value *Ptr1) const
     -> std::optional<int> {
+  // Try SCEV first.
+  const SCEV *Scev0 = SE.getSCEV(Ptr0);
+  const SCEV *Scev1 = SE.getSCEV(Ptr1);
+  const SCEV *ScevDiff = SE.getMinusSCEV(Scev0, Scev1);
+  if (auto *Const = dyn_cast<SCEVConstant>(ScevDiff)) {
+    APInt V = Const->getAPInt();
+    if (V.isSignedIntN(8 * sizeof(int)))
+      return static_cast<int>(V.getSExtValue());
+  }
+
   struct Builder : IRBuilder<> {
     Builder(BasicBlock *B) : IRBuilder<>(B->getTerminator()) {}
     ~Builder() {
@@ -2760,8 +2832,7 @@ auto HexagonVectorCombine::getNumSignificantBits(const Value *V,
 auto HexagonVectorCombine::getKnownBits(const Value *V,
                                         const Instruction *CtxI) const
     -> KnownBits {
-  return computeKnownBits(V, DL, /*Depth=*/0, &AC, CtxI, &DT, /*ORE=*/nullptr,
-                          /*UseInstrInfo=*/true);
+  return computeKnownBits(V, DL, /*Depth=*/0, &AC, CtxI, &DT);
 }
 
 auto HexagonVectorCombine::isSafeToClone(const Instruction &In) const -> bool {
@@ -2877,6 +2948,7 @@ public:
     AU.addRequired<AAResultsWrapperPass>();
     AU.addRequired<AssumptionCacheTracker>();
     AU.addRequired<DominatorTreeWrapperPass>();
+    AU.addRequired<ScalarEvolutionWrapperPass>();
     AU.addRequired<TargetLibraryInfoWrapperPass>();
     AU.addRequired<TargetPassConfig>();
     FunctionPass::getAnalysisUsage(AU);
@@ -2889,10 +2961,11 @@ public:
     AssumptionCache &AC =
         getAnalysis<AssumptionCacheTracker>().getAssumptionCache(F);
     DominatorTree &DT = getAnalysis<DominatorTreeWrapperPass>().getDomTree();
+    ScalarEvolution &SE = getAnalysis<ScalarEvolutionWrapperPass>().getSE();
     TargetLibraryInfo &TLI =
         getAnalysis<TargetLibraryInfoWrapperPass>().getTLI(F);
     auto &TM = getAnalysis<TargetPassConfig>().getTM<HexagonTargetMachine>();
-    HexagonVectorCombine HVC(F, AA, AC, DT, TLI, TM);
+    HexagonVectorCombine HVC(F, AA, AC, DT, SE, TLI, TM);
     return HVC.run();
   }
 };
@@ -2905,6 +2978,7 @@ INITIALIZE_PASS_BEGIN(HexagonVectorCombineLegacy, DEBUG_TYPE,
 INITIALIZE_PASS_DEPENDENCY(AAResultsWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(AssumptionCacheTracker)
 INITIALIZE_PASS_DEPENDENCY(DominatorTreeWrapperPass)
+INITIALIZE_PASS_DEPENDENCY(ScalarEvolutionWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetLibraryInfoWrapperPass)
 INITIALIZE_PASS_DEPENDENCY(TargetPassConfig)
 INITIALIZE_PASS_END(HexagonVectorCombineLegacy, DEBUG_TYPE,

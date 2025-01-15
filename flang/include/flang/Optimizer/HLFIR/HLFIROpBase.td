@@ -15,6 +15,7 @@
 #define FORTRAN_DIALECT_HLFIR_OP_BASE
 
 include "mlir/IR/AttrTypeBase.td"
+include "mlir/IR/EnumAttr.td"
 include "mlir/IR/OpBase.td"
 include "flang/Optimizer/Dialect/FIRTypes.td"
 
@@ -38,6 +39,7 @@ def hlfir_Dialect : Dialect {
   }];
 
   let useDefaultTypePrinterParser = 1;
+  let usePropertiesForAttributes = 1;
   let cppNamespace = "hlfir";
   let dependentDialects = ["fir::FIROpsDialect"];
 }
@@ -91,7 +93,7 @@ def AnyFortranVariable : Type<IsFortranVariablePred, "any HLFIR variable type">;
 
 def AnyFortranValue : TypeConstraint<Or<[AnyLogicalLike.predicate,
     AnyIntegerLike.predicate, AnyRealLike.predicate,
-    fir_ComplexType.predicate, AnyComplex.predicate,
+    AnyFirComplexLike.predicate,
     hlfir_ExprType.predicate]>, "any Fortran value type">;
 
 
@@ -107,6 +109,16 @@ def IsFortranScalarCharacterExprPred
         : CPred<"::hlfir::isFortranScalarCharacterExprType($_self)">;
 def AnyScalarCharacterExpr : Type<IsFortranScalarCharacterExprPred,
     "any character scalar expression type">;
+
+def isFortranArrayCharacterExprTypePred
+        : CPred<"::hlfir::isFortranArrayCharacterExprType($_self)">;
+def AnyArrayCharacterExpr : Type<isFortranArrayCharacterExprTypePred,
+    "any character array expression type">;
+
+def AnyScalarOrArrayCharacterExpr :
+    Type<Or<[AnyScalarCharacterExpr.predicate,
+             AnyArrayCharacterExpr.predicate]>,
+    "any character scalar or array expression type">;
 
 def IsFortranNumericalArrayObjectPred
         : CPred<"::hlfir::isFortranNumericalArrayObject($_self)">;
@@ -138,4 +150,23 @@ def IsFortranLogicalArrayPred
 def AnyFortranLogicalArrayObject : Type<IsFortranLogicalArrayPred,
     "any array-like object containing logicals">;
 
+def IsPolymorphicObjectPred
+        : CPred<"::hlfir::isPolymorphicObject($_self)">;
+def AnyPolymorphicObject : Type<IsPolymorphicObjectPred,
+    "any polymorphic object">;
+
+def IsFortranIntegerScalarOrArrayPred
+    : CPred<"::hlfir::isFortranIntegerScalarOrArrayObject($_self)">;
+def AnyFortranIntegerScalarOrArrayObject
+    : Type<IsFortranIntegerScalarOrArrayPred,
+           "A scalar or array object containing integers">;
+
+def hlfir_CharExtremumPredicateAttr : I32EnumAttr<
+    "CharExtremumPredicate", "",
+    [
+      I32EnumAttrCase<"min", 0>,
+      I32EnumAttrCase<"max", 1>
+    ]> {
+  let cppNamespace = "hlfir";
+}
 #endif // FORTRAN_DIALECT_HLFIR_OP_BASE

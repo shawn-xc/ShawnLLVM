@@ -60,6 +60,11 @@ struct BuiltinOpAsmDialectInterface : public OpAsmDialectInterface {
       os << "loc";
       return AliasResult::OverridableAlias;
     }
+    if (auto distinct = llvm::dyn_cast<DistinctAttr>(attr))
+      if (!llvm::isa<UnitAttr>(distinct.getReferencedAttr())) {
+        os << "distinct";
+        return AliasResult::OverridableAlias;
+      }
     return AliasResult::NoAlias;
   }
 
@@ -150,6 +155,16 @@ DataLayoutSpecInterface ModuleOp::getDataLayoutSpec() {
   return {};
 }
 
+TargetSystemSpecInterface ModuleOp::getTargetSystemSpec() {
+  // Take the first and only (if present) attribute that implements the
+  // interface. This needs a linear search, but is called only once per data
+  // layout object construction that is used for repeated queries.
+  for (NamedAttribute attr : getOperation()->getAttrs())
+    if (auto spec = llvm::dyn_cast<TargetSystemSpecInterface>(attr.getValue()))
+      return spec;
+  return {};
+}
+
 LogicalResult ModuleOp::verify() {
   // Check that none of the attributes are non-dialect attributes, except for
   // the symbol related attributes.
@@ -217,10 +232,12 @@ UnrealizedConversionCastOp::fold(FoldAdaptor adaptor,
   return success();
 }
 
-bool UnrealizedConversionCastOp::areCastCompatible(TypeRange inputs,
-                                                   TypeRange outputs) {
-  // `UnrealizedConversionCastOp` is agnostic of the input/output types.
-  return true;
+LogicalResult UnrealizedConversionCastOp::verify() {
+  // TODO: The verifier of external models is not called. This op verifier can
+  // be removed when that is fixed.
+  if (getNumResults() == 0)
+    return emitOpError() << "expected at least one result for cast operation";
+  return success();
 }
 
 //===----------------------------------------------------------------------===//

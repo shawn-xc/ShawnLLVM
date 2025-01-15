@@ -17,13 +17,10 @@ add_lldb_library(lldbPluginSymbolFileDWARF PLUGIN
   DWARFCompileUnit.cpp
   DWARFContext.cpp
   DWARFDataExtractor.cpp
-  DWARFDebugAbbrev.cpp
   DWARFDebugAranges.cpp
-  DWARFDebugArangeSet.cpp
   DWARFDebugInfo.cpp
   DWARFDebugInfoEntry.cpp
   DWARFDebugMacro.cpp
-  DWARFDebugRanges.cpp
   DWARFDeclContext.cpp
   DWARFDefines.cpp
   DWARFDIE.cpp
@@ -31,7 +28,6 @@ add_lldb_library(lldbPluginSymbolFileDWARF PLUGIN
   DWARFIndex.cpp
   DWARFTypeUnit.cpp
   DWARFUnit.cpp
-  HashedNameToDIE.cpp
   LogChannelDWARF.cpp
   ManualDWARFIndex.cpp
   NameToDIE.cpp
@@ -48,6 +44,7 @@ add_lldb_library(lldbPluginSymbolFileDWARF PLUGIN
     lldbSymbol
     lldbTarget
     lldbUtility
+    lldbValueObject
     lldbPluginObjCLanguage
     lldbPluginCPlusPlusLanguage
     lldbPluginExpressionParserClang

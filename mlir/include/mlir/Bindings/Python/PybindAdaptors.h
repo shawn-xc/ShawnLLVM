@@ -1,4 +1,4 @@
-//===- PybindAdaptors.h - Adaptors for interop with MLIR APIs -------------===//
+//===- PybindAdaptors.h - Interop with MLIR APIs via pybind11 -------------===//
 //
 // Part of the LLVM Project, under the Apache License v2.0 with LLVM Exceptions.
 // See https://llvm.org/LICENSE.txt for license information.
@@ -6,9 +6,10 @@
 //
 //===----------------------------------------------------------------------===//
 // This file contains adaptors for clients of the core MLIR Python APIs to
-// interop via MLIR CAPI types. The facilities here do not depend on
-// implementation details of the MLIR Python API and do not introduce C++-level
-// dependencies with it (requiring only Python and CAPI-level dependencies).
+// interop via MLIR CAPI types, using pybind11. The facilities here do not
+// depend on implementation details of the MLIR Python API and do not introduce
+// C++-level dependencies with it (requiring only Python and CAPI-level
+// dependencies).
 //
 // It is encouraged to be used both in-tree and out-of-tree. For in-tree use
 // cases, it should be used for dialect implementations (versus relying on
@@ -18,16 +19,19 @@
 #ifndef MLIR_BINDINGS_PYTHON_PYBINDADAPTORS_H
 #define MLIR_BINDINGS_PYTHON_PYBINDADAPTORS_H
 
+#include <pybind11/functional.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/pytypes.h>
 #include <pybind11/stl.h>
 
 #include "mlir-c/Bindings/Python/Interop.h"
+#include "mlir-c/Diagnostics.h"
 #include "mlir-c/IR.h"
 
 #include "llvm/ADT/Twine.h"
 
 namespace py = pybind11;
+using namespace py::literals;
 
 // Raw CAPI type casters need to be declared before use, so always include them
 // first.
@@ -96,7 +100,19 @@ struct type_caster<MlirAttribute> {
     return py::module::import(MAKE_MLIR_PYTHON_QUALNAME("ir"))
         .attr("Attribute")
         .attr(MLIR_PYTHON_CAPI_FACTORY_ATTR)(capsule)
+        .attr(MLIR_PYTHON_MAYBE_DOWNCAST_ATTR)()
         .release();
+  }
+};
+
+/// Casts object -> MlirBlock.
+template <>
+struct type_caster<MlirBlock> {
+  PYBIND11_TYPE_CASTER(MlirBlock, _("MlirBlock"));
+  bool load(handle src, bool) {
+    py::object capsule = mlirApiObjectToCapsule(src);
+    value = mlirPythonCapsuleToBlock(capsule.ptr());
+    return !mlirBlockIsNull(value);
   }
 };
 
@@ -183,6 +199,27 @@ struct type_caster<MlirModule> {
   };
 };
 
+/// Casts object <-> MlirFrozenRewritePatternSet.
+template <>
+struct type_caster<MlirFrozenRewritePatternSet> {
+  PYBIND11_TYPE_CASTER(MlirFrozenRewritePatternSet,
+                       _("MlirFrozenRewritePatternSet"));
+  bool load(handle src, bool) {
+    py::object capsule = mlirApiObjectToCapsule(src);
+    value = mlirPythonCapsuleToFrozenRewritePatternSet(capsule.ptr());
+    return value.ptr != nullptr;
+  }
+  static handle cast(MlirFrozenRewritePatternSet v, return_value_policy,
+                     handle) {
+    py::object capsule = py::reinterpret_steal<py::object>(
+        mlirPythonFrozenRewritePatternSetToCapsule(v));
+    return py::module::import(MAKE_MLIR_PYTHON_QUALNAME("rewrite"))
+        .attr("FrozenRewritePatternSet")
+        .attr(MLIR_PYTHON_CAPI_FACTORY_ATTR)(capsule)
+        .release();
+  };
+};
+
 /// Casts object <-> MlirOperation.
 template <>
 struct type_caster<MlirOperation> {
@@ -221,6 +258,7 @@ struct type_caster<MlirValue> {
     return py::module::import(MAKE_MLIR_PYTHON_QUALNAME("ir"))
         .attr("Value")
         .attr(MLIR_PYTHON_CAPI_FACTORY_ATTR)(capsule)
+        .attr(MLIR_PYTHON_MAYBE_DOWNCAST_ATTR)()
         .release();
   };
 };
@@ -272,6 +310,7 @@ struct type_caster<MlirType> {
     return py::module::import(MAKE_MLIR_PYTHON_QUALNAME("ir"))
         .attr("Type")
         .attr(MLIR_PYTHON_CAPI_FACTORY_ATTR)(capsule)
+        .attr(MLIR_PYTHON_MAYBE_DOWNCAST_ATTR)()
         .release();
   }
 };
@@ -335,9 +374,8 @@ public:
     static_assert(!std::is_member_function_pointer<Func>::value,
                   "def_staticmethod(...) called with a non-static member "
                   "function pointer");
-    py::cpp_function cf(
-        std::forward<Func>(f), py::name(name), py::scope(thisClass),
-        py::sibling(py::getattr(thisClass, name, py::none())), extra...);
+    py::cpp_function cf(std::forward<Func>(f), py::name(name),
+                        py::scope(thisClass), extra...);
     thisClass.attr(cf.name()) = py::staticmethod(cf);
     return *this;
   }
@@ -348,9 +386,8 @@ public:
     static_assert(!std::is_member_function_pointer<Func>::value,
                   "def_classmethod(...) called with a non-static member "
                   "function pointer");
-    py::cpp_function cf(
-        std::forward<Func>(f), py::name(name), py::scope(thisClass),
-        py::sibling(py::getattr(thisClass, name, py::none())), extra...);
+    py::cpp_function cf(std::forward<Func>(f), py::name(name),
+                        py::scope(thisClass), extra...);
     thisClass.attr(cf.name()) =
         py::reinterpret_borrow<py::object>(PyClassMethod_New(cf.ptr()));
     return *this;
@@ -368,21 +405,25 @@ protected:
 class mlir_attribute_subclass : public pure_subclass {
 public:
   using IsAFunctionTy = bool (*)(MlirAttribute);
+  using GetTypeIDFunctionTy = MlirTypeID (*)();
 
   /// Subclasses by looking up the super-class dynamically.
   mlir_attribute_subclass(py::handle scope, const char *attrClassName,
-                          IsAFunctionTy isaFunction)
+                          IsAFunctionTy isaFunction,
+                          GetTypeIDFunctionTy getTypeIDFunction = nullptr)
       : mlir_attribute_subclass(
             scope, attrClassName, isaFunction,
             py::module::import(MAKE_MLIR_PYTHON_QUALNAME("ir"))
-                .attr("Attribute")) {}
+                .attr("Attribute"),
+            getTypeIDFunction) {}
 
   /// Subclasses with a provided mlir.ir.Attribute super-class. This must
   /// be used if the subclass is being defined in the same extension module
   /// as the mlir.ir class (otherwise, it will trigger a recursive
   /// initialization).
   mlir_attribute_subclass(py::handle scope, const char *typeClassName,
-                          IsAFunctionTy isaFunction, const py::object &superCls)
+                          IsAFunctionTy isaFunction, const py::object &superCls,
+                          GetTypeIDFunctionTy getTypeIDFunction = nullptr)
       : pure_subclass(scope, typeClassName, superCls) {
     // Casting constructor. Note that it hard, if not impossible, to properly
     // call chain to parent `__init__` in pybind11 due to its special handling
@@ -416,6 +457,20 @@ public:
         "isinstance",
         [isaFunction](MlirAttribute other) { return isaFunction(other); },
         py::arg("other_attribute"));
+    def("__repr__", [superCls, captureTypeName](py::object self) {
+      return py::repr(superCls(self))
+          .attr("replace")(superCls.attr("__name__"), captureTypeName);
+    });
+    if (getTypeIDFunction) {
+      def_staticmethod("get_static_typeid",
+                       [getTypeIDFunction]() { return getTypeIDFunction(); });
+      py::module::import(MAKE_MLIR_PYTHON_QUALNAME("ir"))
+          .attr(MLIR_PYTHON_CAPI_TYPE_CASTER_REGISTER_ATTR)(
+              getTypeIDFunction())(pybind11::cpp_function(
+              [thisClass = thisClass](const py::object &mlirAttribute) {
+                return thisClass(mlirAttribute);
+              }));
+    }
   }
 };
 
@@ -424,20 +479,24 @@ public:
 class mlir_type_subclass : public pure_subclass {
 public:
   using IsAFunctionTy = bool (*)(MlirType);
+  using GetTypeIDFunctionTy = MlirTypeID (*)();
 
   /// Subclasses by looking up the super-class dynamically.
   mlir_type_subclass(py::handle scope, const char *typeClassName,
-                     IsAFunctionTy isaFunction)
+                     IsAFunctionTy isaFunction,
+                     GetTypeIDFunctionTy getTypeIDFunction = nullptr)
       : mlir_type_subclass(
             scope, typeClassName, isaFunction,
-            py::module::import(MAKE_MLIR_PYTHON_QUALNAME("ir")).attr("Type")) {}
+            py::module::import(MAKE_MLIR_PYTHON_QUALNAME("ir")).attr("Type"),
+            getTypeIDFunction) {}
 
   /// Subclasses with a provided mlir.ir.Type super-class. This must
   /// be used if the subclass is being defined in the same extension module
   /// as the mlir.ir class (otherwise, it will trigger a recursive
   /// initialization).
   mlir_type_subclass(py::handle scope, const char *typeClassName,
-                     IsAFunctionTy isaFunction, const py::object &superCls)
+                     IsAFunctionTy isaFunction, const py::object &superCls,
+                     GetTypeIDFunctionTy getTypeIDFunction = nullptr)
       : pure_subclass(scope, typeClassName, superCls) {
     // Casting constructor. Note that it hard, if not impossible, to properly
     // call chain to parent `__init__` in pybind11 due to its special handling
@@ -471,6 +530,25 @@ public:
         "isinstance",
         [isaFunction](MlirType other) { return isaFunction(other); },
         py::arg("other_type"));
+    def("__repr__", [superCls, captureTypeName](py::object self) {
+      return py::repr(superCls(self))
+          .attr("replace")(superCls.attr("__name__"), captureTypeName);
+    });
+    if (getTypeIDFunction) {
+      // 'get_static_typeid' method.
+      // This is modeled as a static method instead of a static property because
+      // `def_property_readonly_static` is not available in `pure_subclass` and
+      // we do not want to introduce the complexity that pybind uses to
+      // implement it.
+      def_staticmethod("get_static_typeid",
+                       [getTypeIDFunction]() { return getTypeIDFunction(); });
+      py::module::import(MAKE_MLIR_PYTHON_QUALNAME("ir"))
+          .attr(MLIR_PYTHON_CAPI_TYPE_CASTER_REGISTER_ATTR)(
+              getTypeIDFunction())(pybind11::cpp_function(
+              [thisClass = thisClass](const py::object &mlirType) {
+                return thisClass(mlirType);
+              }));
+    }
   }
 };
 
@@ -531,6 +609,7 @@ public:
 };
 
 } // namespace adaptors
+
 } // namespace python
 } // namespace mlir
 

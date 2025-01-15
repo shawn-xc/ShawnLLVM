@@ -1,9 +1,13 @@
 add_llvm_component_library(LLVMSystemZDesc
-  SystemZInstPrinter.cpp
+  SystemZELFObjectWriter.cpp
+  SystemZGNUInstPrinter.cpp
+  SystemZGOFFObjectWriter.cpp
+  SystemZHLASMInstPrinter.cpp
+  SystemZInstPrinterCommon.cpp
   SystemZMCAsmBackend.cpp
   SystemZMCAsmInfo.cpp
   SystemZMCCodeEmitter.cpp
-  SystemZMCObjectWriter.cpp
+  SystemZMCExpr.cpp
   SystemZMCTargetDesc.cpp
 
   LINK_COMPONENTS

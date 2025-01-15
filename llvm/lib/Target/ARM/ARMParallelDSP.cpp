@@ -24,12 +24,13 @@
 #include "llvm/Analysis/LoopAccessAnalysis.h"
 #include "llvm/Analysis/TargetLibraryInfo.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
+#include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/IntrinsicsARM.h"
+#include "llvm/IR/Module.h"
 #include "llvm/IR/NoFolder.h"
 #include "llvm/IR/PatternMatch.h"
 #include "llvm/Pass.h"
-#include "llvm/PassRegistry.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Transforms/Scalar.h"
 #include "llvm/Transforms/Utils/BasicBlockUtils.h"
@@ -628,13 +629,14 @@ void ARMParallelDSP::InsertParallelMACs(Reduction &R) {
     Value* Args[] = { WideLd0, WideLd1, Acc };
     Function *SMLAD = nullptr;
     if (Exchange)
-      SMLAD = Acc->getType()->isIntegerTy(32) ?
-        Intrinsic::getDeclaration(M, Intrinsic::arm_smladx) :
-        Intrinsic::getDeclaration(M, Intrinsic::arm_smlaldx);
+      SMLAD =
+          Acc->getType()->isIntegerTy(32)
+              ? Intrinsic::getOrInsertDeclaration(M, Intrinsic::arm_smladx)
+              : Intrinsic::getOrInsertDeclaration(M, Intrinsic::arm_smlaldx);
     else
-      SMLAD = Acc->getType()->isIntegerTy(32) ?
-        Intrinsic::getDeclaration(M, Intrinsic::arm_smlad) :
-        Intrinsic::getDeclaration(M, Intrinsic::arm_smlald);
+      SMLAD = Acc->getType()->isIntegerTy(32)
+                  ? Intrinsic::getOrInsertDeclaration(M, Intrinsic::arm_smlad)
+                  : Intrinsic::getOrInsertDeclaration(M, Intrinsic::arm_smlald);
 
     IRBuilder<NoFolder> Builder(InsertAfter->getParent(),
                                 BasicBlock::iterator(InsertAfter));
@@ -760,12 +762,10 @@ LoadInst* ARMParallelDSP::CreateWideLoad(MemInstList &Loads,
   IRBuilder<NoFolder> IRB(DomLoad->getParent(),
                           ++BasicBlock::iterator(DomLoad));
 
-  // Bitcast the pointer to a wider type and create the wide load, while making
-  // sure to maintain the original alignment as this prevents ldrd from being
-  // generated when it could be illegal due to memory alignment.
-  const unsigned AddrSpace = DomLoad->getPointerAddressSpace();
-  Value *VecPtr = IRB.CreateBitCast(Base->getPointerOperand(),
-                                    LoadTy->getPointerTo(AddrSpace));
+  // Create the wide load, while making sure to maintain the original alignment
+  // as this prevents ldrd from being generated when it could be illegal due to
+  // memory alignment.
+  Value *VecPtr = Base->getPointerOperand();
   LoadInst *WideLoad = IRB.CreateAlignedLoad(LoadTy, VecPtr, Base->getAlign());
 
   // Make sure everything is in the correct order in the basic block.

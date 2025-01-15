@@ -1,16 +1,10 @@
 # Check if this is a in tree build.
 if (NOT DEFINED LLVM_MAIN_SRC_DIR)
   project(Polly)
-  cmake_minimum_required(VERSION 3.13.4)
-  if ("${CMAKE_VERSION}" VERSION_LESS "3.20.0")
-    message(WARNING
-      "Your CMake version is ${CMAKE_VERSION}. Starting with LLVM 17.0.0, the "
-      "minimum version of CMake required to build LLVM will become 3.20.0, and "
-      "using an older CMake will become an error. Please upgrade your CMake to "
-      "at least 3.20.0 now to avoid issues in the future!")
-  endif()
+  cmake_minimum_required(VERSION 3.20.0)
   set(POLLY_STANDALONE_BUILD TRUE)
 endif()
+set(LLVM_SUBPROJECT_TITLE "Polly")
 
 # Must go below project(..)
 include(GNUInstallDirs)
@@ -35,11 +29,7 @@ if(POLLY_STANDALONE_BUILD)
 
   # Enable unit tests if available.
   set(POLLY_GTEST_AVAIL 0)
-  set(UNITTEST_DIR ${LLVM_THIRD_PARTY_DIR}/unittest)
-  if(EXISTS ${UNITTEST_DIR}/googletest/include/gtest/gtest.h)
-    if (NOT TARGET gtest)
-      add_subdirectory(${UNITTEST_DIR} third-party/unittest)
-    endif()
+  if(TARGET llvm_gtest)
     set(POLLY_GTEST_AVAIL 1)
   endif()
 
@@ -164,8 +154,7 @@ foreach (file IN LISTS files)
 endforeach ()
 
 add_custom_target(polly-check-format DEPENDS ${check_format_depends})
-set_target_properties(polly-check-format PROPERTIES FOLDER "Polly")
+set_target_properties(polly-check-format PROPERTIES FOLDER "Polly/Metatargets")
 
 add_custom_target(polly-update-format DEPENDS ${update_format_depends})
-set_target_properties(polly-update-format PROPERTIES FOLDER "Polly")
-
+set_target_properties(polly-update-format PROPERTIES FOLDER "Polly/Metatargets")

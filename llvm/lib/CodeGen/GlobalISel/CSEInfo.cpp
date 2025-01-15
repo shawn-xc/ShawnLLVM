@@ -76,9 +76,9 @@ bool CSEConfigConstantOnly::shouldCSEOpc(unsigned Opc) {
 }
 
 std::unique_ptr<CSEConfigBase>
-llvm::getStandardCSEConfigForOpt(CodeGenOpt::Level Level) {
+llvm::getStandardCSEConfigForOpt(CodeGenOptLevel Level) {
   std::unique_ptr<CSEConfigBase> Config;
-  if (Level == CodeGenOpt::None)
+  if (Level == CodeGenOptLevel::None)
     Config = std::make_unique<CSEConfigConstantOnly>();
   else
     Config = std::make_unique<CSEConfigFull>();
@@ -163,7 +163,7 @@ MachineInstr *GISelCSEInfo::getMachineInstrIfExists(FoldingSetNodeID &ID,
                                                     void *&InsertPos) {
   handleRecordedInsts();
   if (auto *Inst = getNodeIfExists(ID, MBB, InsertPos)) {
-    LLVM_DEBUG(dbgs() << "CSEInfo::Found Instr " << *Inst->MI;);
+    LLVM_DEBUG(dbgs() << "CSEInfo::Found Instr " << *Inst->MI);
     return const_cast<MachineInstr *>(Inst->MI);
   }
   return nullptr;
@@ -244,8 +244,6 @@ void GISelCSEInfo::changedInstr(MachineInstr &MI) { changingInstr(MI); }
 void GISelCSEInfo::analyze(MachineFunction &MF) {
   setMF(MF);
   for (auto &MBB : MF) {
-    if (MBB.empty())
-      continue;
     for (MachineInstr &MI : MBB) {
       if (!shouldCSE(MI.getOpcode()))
         continue;
@@ -315,11 +313,11 @@ Error GISelCSEInfo::verify() {
 }
 
 void GISelCSEInfo::print() {
-  LLVM_DEBUG(for (auto &It
-                  : OpcodeHitTable) {
-    dbgs() << "CSEInfo::CSE Hit for Opc " << It.first << " : " << It.second
-           << "\n";
-  };);
+  LLVM_DEBUG({
+    for (auto &It : OpcodeHitTable)
+      dbgs() << "CSEInfo::CSE Hit for Opc " << It.first << " : " << It.second
+             << "\n";
+  });
 }
 /// -----------------------------------------
 // ---- Profiling methods for FoldingSetNode --- //
@@ -358,6 +356,20 @@ GISelInstProfileBuilder::addNodeIDRegType(const RegisterBank *RB) const {
   return *this;
 }
 
+const GISelInstProfileBuilder &GISelInstProfileBuilder::addNodeIDRegType(
+    MachineRegisterInfo::VRegAttrs Attrs) const {
+  addNodeIDRegType(Attrs.Ty);
+
+  const RegClassOrRegBank &RCOrRB = Attrs.RCOrRB;
+  if (RCOrRB) {
+    if (const auto *RB = dyn_cast_if_present<const RegisterBank *>(RCOrRB))
+      addNodeIDRegType(RB);
+    else
+      addNodeIDRegType(cast<const TargetRegisterClass *>(RCOrRB));
+  }
+  return *this;
+}
+
 const GISelInstProfileBuilder &
 GISelInstProfileBuilder::addNodeIDImmediate(int64_t Imm) const {
   ID.AddInteger(Imm);
@@ -391,17 +403,7 @@ GISelInstProfileBuilder::addNodeIDFlag(unsigned Flag) const {
 
 const GISelInstProfileBuilder &
 GISelInstProfileBuilder::addNodeIDReg(Register Reg) const {
-  LLT Ty = MRI.getType(Reg);
-  if (Ty.isValid())
-    addNodeIDRegType(Ty);
-
-  if (const RegClassOrRegBank &RCOrRB = MRI.getRegClassOrRegBank(Reg)) {
-    if (const auto *RB = dyn_cast_if_present<const RegisterBank *>(RCOrRB))
-      addNodeIDRegType(RB);
-    else if (const auto *RC =
-                 dyn_cast_if_present<const TargetRegisterClass *>(RCOrRB))
-      addNodeIDRegType(RC);
-  }
+  addNodeIDRegType(MRI.getVRegAttrs(Reg));
   return *this;
 }
 

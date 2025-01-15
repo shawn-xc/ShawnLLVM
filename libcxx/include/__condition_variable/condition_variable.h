@@ -9,17 +9,19 @@
 #ifndef _LIBCPP___CONDITION_VARIABLE_CONDITION_VARIABLE_H
 #define _LIBCPP___CONDITION_VARIABLE_CONDITION_VARIABLE_H
 
+#include <__chrono/duration.h>
 #include <__chrono/steady_clock.h>
 #include <__chrono/system_clock.h>
 #include <__chrono/time_point.h>
 #include <__config>
 #include <__mutex/mutex.h>
 #include <__mutex/unique_lock.h>
-#include <__system_error/system_error.h>
-#include <__threading_support>
+#include <__system_error/throw_system_error.h>
+#include <__thread/support.h>
 #include <__type_traits/enable_if.h>
 #include <__type_traits/is_floating_point.h>
 #include <__utility/move.h>
+#include <limits>
 #include <ratio>
 
 #if !defined(_LIBCPP_HAS_NO_PRAGMA_SYSTEM_HEADER)
@@ -31,19 +33,19 @@ _LIBCPP_PUSH_MACROS
 
 _LIBCPP_BEGIN_NAMESPACE_STD
 
-#ifndef _LIBCPP_HAS_NO_THREADS
+#if _LIBCPP_HAS_THREADS
 
 // enum class cv_status
 _LIBCPP_DECLARE_STRONG_ENUM(cv_status){no_timeout, timeout};
 _LIBCPP_DECLARE_STRONG_ENUM_EPILOG(cv_status)
 
-class _LIBCPP_TYPE_VIS condition_variable {
+class _LIBCPP_EXPORTED_FROM_ABI condition_variable {
   __libcpp_condvar_t __cv_ = _LIBCPP_CONDVAR_INITIALIZER;
 
 public:
   _LIBCPP_HIDE_FROM_ABI _LIBCPP_CONSTEXPR condition_variable() _NOEXCEPT = default;
 
-#  ifdef _LIBCPP_HAS_TRIVIAL_CONDVAR_DESTRUCTION
+#  if _LIBCPP_HAS_TRIVIAL_CONDVAR_DESTRUCTION
   ~condition_variable() = default;
 #  else
   ~condition_variable();
@@ -81,7 +83,7 @@ public:
 private:
   void
   __do_timed_wait(unique_lock<mutex>& __lk, chrono::time_point<chrono::system_clock, chrono::nanoseconds>) _NOEXCEPT;
-#  if defined(_LIBCPP_HAS_COND_CLOCKWAIT)
+#  if _LIBCPP_HAS_COND_CLOCKWAIT
   _LIBCPP_HIDE_FROM_ABI void
   __do_timed_wait(unique_lock<mutex>& __lk, chrono::time_point<chrono::steady_clock, chrono::nanoseconds>) _NOEXCEPT;
 #  endif
@@ -89,11 +91,10 @@ private:
   _LIBCPP_HIDE_FROM_ABI void
   __do_timed_wait(unique_lock<mutex>& __lk, chrono::time_point<_Clock, chrono::nanoseconds>) _NOEXCEPT;
 };
-#endif // !_LIBCPP_HAS_NO_THREADS
+#endif // _LIBCPP_HAS_THREADS
 
-template <class _Rep, class _Period>
-inline _LIBCPP_HIDE_FROM_ABI __enable_if_t<is_floating_point<_Rep>::value, chrono::nanoseconds>
-__safe_nanosecond_cast(chrono::duration<_Rep, _Period> __d) {
+template <class _Rep, class _Period, __enable_if_t<is_floating_point<_Rep>::value, int> = 0>
+inline _LIBCPP_HIDE_FROM_ABI chrono::nanoseconds __safe_nanosecond_cast(chrono::duration<_Rep, _Period> __d) {
   using namespace chrono;
   using __ratio       = ratio_divide<_Period, nano>;
   using __ns_rep      = nanoseconds::rep;
@@ -112,9 +113,8 @@ __safe_nanosecond_cast(chrono::duration<_Rep, _Period> __d) {
   return nanoseconds(static_cast<__ns_rep>(__result_float));
 }
 
-template <class _Rep, class _Period>
-inline _LIBCPP_HIDE_FROM_ABI __enable_if_t<!is_floating_point<_Rep>::value, chrono::nanoseconds>
-__safe_nanosecond_cast(chrono::duration<_Rep, _Period> __d) {
+template <class _Rep, class _Period, __enable_if_t<!is_floating_point<_Rep>::value, int> = 0>
+inline _LIBCPP_HIDE_FROM_ABI chrono::nanoseconds __safe_nanosecond_cast(chrono::duration<_Rep, _Period> __d) {
   using namespace chrono;
   if (__d.count() == 0) {
     return nanoseconds(0);
@@ -140,7 +140,7 @@ __safe_nanosecond_cast(chrono::duration<_Rep, _Period> __d) {
   return nanoseconds(__result);
 }
 
-#ifndef _LIBCPP_HAS_NO_THREADS
+#if _LIBCPP_HAS_THREADS
 template <class _Predicate>
 void condition_variable::wait(unique_lock<mutex>& __lk, _Predicate __pred) {
   while (!__pred())
@@ -180,7 +180,7 @@ cv_status condition_variable::wait_for(unique_lock<mutex>& __lk, const chrono::d
   using __ns_rep                   = nanoseconds::rep;
   steady_clock::time_point __c_now = steady_clock::now();
 
-#  if defined(_LIBCPP_HAS_COND_CLOCKWAIT)
+#  if _LIBCPP_HAS_COND_CLOCKWAIT
   using __clock_tp_ns     = time_point<steady_clock, nanoseconds>;
   __ns_rep __now_count_ns = std::__safe_nanosecond_cast(__c_now.time_since_epoch()).count();
 #  else
@@ -205,7 +205,7 @@ condition_variable::wait_for(unique_lock<mutex>& __lk, const chrono::duration<_R
   return wait_until(__lk, chrono::steady_clock::now() + __d, std::move(__pred));
 }
 
-#  if defined(_LIBCPP_HAS_COND_CLOCKWAIT)
+#  if _LIBCPP_HAS_COND_CLOCKWAIT
 inline void condition_variable::__do_timed_wait(
     unique_lock<mutex>& __lk, chrono::time_point<chrono::steady_clock, chrono::nanoseconds> __tp) _NOEXCEPT {
   using namespace chrono;
@@ -235,7 +235,7 @@ inline void condition_variable::__do_timed_wait(unique_lock<mutex>& __lk,
   wait_for(__lk, __tp - _Clock::now());
 }
 
-#endif // _LIBCPP_HAS_NO_THREADS
+#endif // _LIBCPP_HAS_THREADS
 
 _LIBCPP_END_NAMESPACE_STD
 

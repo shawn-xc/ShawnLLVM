@@ -20,11 +20,13 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <string_view>
 
 using namespace llvm;
 
 using llvm::itanium_demangle::OutputBuffer;
 using llvm::itanium_demangle::ScopedOverride;
+using llvm::itanium_demangle::starts_with;
 
 namespace {
 
@@ -146,17 +148,13 @@ private:
 
 } // namespace
 
-char *llvm::rustDemangle(const char *MangledName) {
-  if (MangledName == nullptr)
-    return nullptr;
-
+char *llvm::rustDemangle(std::string_view MangledName) {
   // Return early if mangled name doesn't look like a Rust symbol.
-  std::string_view Mangled(MangledName);
-  if (!llvm::itanium_demangle::starts_with(Mangled, "_R"))
+  if (MangledName.empty() || !starts_with(MangledName, "_R"))
     return nullptr;
 
   Demangler D;
-  if (!D.demangle(Mangled)) {
+  if (!D.demangle(MangledName)) {
     std::free(D.Output.getBuffer());
     return nullptr;
   }
@@ -196,7 +194,7 @@ bool Demangler::demangle(std::string_view Mangled) {
   RecursionLevel = 0;
   BoundLifetimes = 0;
 
-  if (!llvm::itanium_demangle::starts_with(Mangled, "_R")) {
+  if (!starts_with(Mangled, "_R")) {
     Error = true;
     return false;
   }
@@ -872,7 +870,7 @@ Identifier Demangler::parseIdentifier() {
 // Parses optional base 62 number. The presence of a number is determined using
 // Tag. Returns 0 when tag is absent and parsed value + 1 otherwise
 //
-// This function is indended for parsing disambiguators and binders which when
+// This function is intended for parsing disambiguators and binders which when
 // not present have their value interpreted as 0, and otherwise as decoded
 // value + 1. For example for binders, value for "G_" is 1, for "G0_" value is
 // 2. When "G" is absent value is 0.

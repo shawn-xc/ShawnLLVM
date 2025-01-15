@@ -26,7 +26,6 @@
 #if SANITIZER_POSIX
 #include "sanitizer_common/sanitizer_posix.h"
 #endif
-#include "sanitizer_common/sanitizer_tls_get_addr.h"
 #include "lsan.h"
 #include "lsan_allocator.h"
 #include "lsan_common.h"
@@ -77,6 +76,8 @@ INTERCEPTOR(void*, malloc, uptr size) {
 }
 
 INTERCEPTOR(void, free, void *p) {
+  if (UNLIKELY(!p))
+    return;
   if (DlsymAlloc::PointerIsMine(p))
     return DlsymAlloc::Free(p);
   ENSURE_LSAN_INITED;
@@ -133,9 +134,7 @@ INTERCEPTOR(void*, memalign, uptr alignment, uptr size) {
 INTERCEPTOR(void *, __libc_memalign, uptr alignment, uptr size) {
   ENSURE_LSAN_INITED;
   GET_STACK_TRACE_MALLOC;
-  void *res = lsan_memalign(alignment, size, stack);
-  DTLS_on_libc_memalign(res, size);
-  return res;
+  return lsan_memalign(alignment, size, stack);
 }
 #define LSAN_MAYBE_INTERCEPT___LIBC_MEMALIGN INTERCEPT_FUNCTION(__libc_memalign)
 #else
@@ -389,7 +388,7 @@ INTERCEPTOR(int, atexit, void (*f)()) {
 extern "C" {
 extern int _pthread_atfork(void (*prepare)(), void (*parent)(),
                            void (*child)());
-};
+}
 
 INTERCEPTOR(int, pthread_atfork, void (*prepare)(), void (*parent)(),
             void (*child)()) {
@@ -415,8 +414,10 @@ INTERCEPTOR(char *, strerror, int errnum) {
 
 #if SANITIZER_POSIX
 
-extern "C" void *__lsan_thread_start_func(void *arg) {
-  atomic_uintptr_t *atomic_tid = (atomic_uintptr_t *)arg;
+template <bool Detached>
+static void *ThreadStartFunc(void *arg) {
+  u32 parent_tid = (uptr)arg;
+  uptr tid = ThreadCreate(parent_tid, Detached);
   // Wait until the last iteration to maximize the chance that we are the last
   // destructor to run.
 #if !SANITIZER_NETBSD && !SANITIZER_FREEBSD
@@ -425,12 +426,8 @@ extern "C" void *__lsan_thread_start_func(void *arg) {
     Report("LeakSanitizer: failed to set thread key.\n");
     Die();
   }
-#endif
-  int tid = 0;
-  while ((tid = atomic_load(atomic_tid, memory_order_acquire)) == 0)
-    internal_sched_yield();
+#  endif
   ThreadStart(tid, GetTid());
-  atomic_store(atomic_tid, 0, memory_order_release);
   auto self = GetThreadSelf();
   auto args = GetThreadArgRetval().GetArgs(self);
   void *retval = (*args.routine)(args.arg_retval);
@@ -442,17 +439,19 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr,
             void *(*callback)(void *), void *param) {
   ENSURE_LSAN_INITED;
   EnsureMainThreadIDIsCorrect();
+
   bool detached = [attr]() {
     int d = 0;
     return attr && !pthread_attr_getdetachstate(attr, &d) && IsStateDetached(d);
   }();
+
   __sanitizer_pthread_attr_t myattr;
   if (!attr) {
     pthread_attr_init(&myattr);
     attr = &myattr;
   }
   AdjustStackSize(attr);
-  atomic_uintptr_t atomic_tid = {};
+  uptr this_tid = GetCurrentThreadId();
   int result;
   {
     // Ignore all allocations made by pthread_create: thread stack/TLS may be
@@ -461,17 +460,11 @@ INTERCEPTOR(int, pthread_create, void *th, void *attr,
     // objects, the latter are calculated by obscure pointer arithmetic.
     ScopedInterceptorDisabler disabler;
     GetThreadArgRetval().Create(detached, {callback, param}, [&]() -> uptr {
-      result =
-          REAL(pthread_create)(th, attr, __lsan_thread_start_func, &atomic_tid);
+      result = REAL(pthread_create)(
+          th, attr, detached ? ThreadStartFunc<true> : ThreadStartFunc<false>,
+          (void *)this_tid);
       return result ? 0 : *(uptr *)(th);
     });
-  }
-  if (result == 0) {
-    int tid = ThreadCreate(GetCurrentThreadId(), detached);
-    CHECK_NE(tid, kMainTid);
-    atomic_store(&atomic_tid, tid, memory_order_release);
-    while (atomic_load(&atomic_tid, memory_order_acquire) != 0)
-      internal_sched_yield();
   }
   if (attr == &myattr)
     pthread_attr_destroy(&myattr);
@@ -496,9 +489,9 @@ INTERCEPTOR(int, pthread_detach, void *thread) {
   return result;
 }
 
-INTERCEPTOR(int, pthread_exit, void *retval) {
+INTERCEPTOR(void, pthread_exit, void *retval) {
   GetThreadArgRetval().Finish(GetThreadSelf(), retval);
-  return REAL(pthread_exit)(retval);
+  REAL(pthread_exit)(retval);
 }
 
 #  if SANITIZER_INTERCEPT_TRYJOIN
@@ -531,7 +524,7 @@ INTERCEPTOR(int, pthread_timedjoin_np, void *thread, void **ret,
 #    define LSAN_MAYBE_INTERCEPT_TIMEDJOIN
 #  endif  // SANITIZER_INTERCEPT_TIMEDJOIN
 
-DEFINE_REAL_PTHREAD_FUNCTIONS
+DEFINE_INTERNAL_PTHREAD_FUNCTIONS
 
 INTERCEPTOR(void, _exit, int status) {
   if (status == 0 && HasReportedLeaks()) status = common_flags()->exitcode;
@@ -539,6 +532,7 @@ INTERCEPTOR(void, _exit, int status) {
 }
 
 #define COMMON_INTERCEPT_FUNCTION(name) INTERCEPT_FUNCTION(name)
+#define SIGNAL_INTERCEPTOR_ENTER() ENSURE_LSAN_INITED
 #include "sanitizer_common/sanitizer_signal_interceptors.inc"
 
 #endif  // SANITIZER_POSIX
@@ -548,6 +542,7 @@ namespace __lsan {
 void InitializeInterceptors() {
   // Fuchsia doesn't use interceptors that require any setup.
 #if !SANITIZER_FUCHSIA
+  __interception::DoesNotSupportStaticLinking();
   InitializeSignalInterceptors();
 
   INTERCEPT_FUNCTION(malloc);

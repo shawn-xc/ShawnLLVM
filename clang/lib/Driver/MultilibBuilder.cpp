@@ -7,7 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "clang/Driver/MultilibBuilder.h"
-#include "llvm/ADT/SmallString.h"
+#include "ToolChains/CommonArgs.h"
 #include "llvm/ADT/StringMap.h"
 #include "llvm/Support/Path.h"
 #include "llvm/Support/Regex.h"
@@ -73,16 +73,19 @@ bool MultilibBuilder::isValid() const {
   llvm::StringMap<int> FlagSet;
   for (unsigned I = 0, N = Flags.size(); I != N; ++I) {
     StringRef Flag(Flags[I]);
-    llvm::StringMap<int>::iterator SI = FlagSet.find(Flag.substr(1));
+    auto [SI, Inserted] = FlagSet.try_emplace(Flag.substr(1), I);
 
-    assert(StringRef(Flag).front() == '+' || StringRef(Flag).front() == '-');
+    assert(StringRef(Flag).front() == '-' || StringRef(Flag).front() == '!');
 
-    if (SI == FlagSet.end())
-      FlagSet[Flag.substr(1)] = I;
-    else if (Flags[I] != Flags[SI->getValue()])
+    if (!Inserted && Flags[I] != Flags[SI->getValue()])
       return false;
   }
   return true;
+}
+
+MultilibBuilder &MultilibBuilder::flag(StringRef Flag, bool Disallow) {
+  tools::addMultilibFlag(!Disallow, Flag, Flags);
+  return *this;
 }
 
 Multilib MultilibBuilder::makeMultilib() const {
@@ -91,10 +94,10 @@ Multilib MultilibBuilder::makeMultilib() const {
 
 MultilibSetBuilder &MultilibSetBuilder::Maybe(const MultilibBuilder &M) {
   MultilibBuilder Opposite;
-  // Negate any '+' flags
+  // Negate positive flags
   for (StringRef Flag : M.flags()) {
-    if (Flag.front() == '+')
-      Opposite.flags().push_back(("-" + Flag.substr(1)).str());
+    if (Flag.front() == '-')
+      Opposite.flag(Flag, /*Disallow=*/true);
   }
   return Either(M, Opposite);
 }

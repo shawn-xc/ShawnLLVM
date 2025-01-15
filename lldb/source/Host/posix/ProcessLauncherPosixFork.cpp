@@ -7,6 +7,7 @@
 //===----------------------------------------------------------------------===//
 
 #include "lldb/Host/posix/ProcessLauncherPosixFork.h"
+#include "lldb/Host/FileSystem.h"
 #include "lldb/Host/Host.h"
 #include "lldb/Host/HostProcess.h"
 #include "lldb/Host/Pipe.h"
@@ -14,15 +15,14 @@
 #include "lldb/Utility/FileSpec.h"
 #include "lldb/Utility/Log.h"
 #include "llvm/Support/Errno.h"
-#include "llvm/Support/FileSystem.h"
 
 #include <climits>
 #include <sys/ptrace.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
-#include <sstream>
 #include <csignal>
+#include <sstream>
 
 #ifdef __ANDROID__
 #include <android/api-level.h>
@@ -47,8 +47,7 @@ static void write_string(int error_fd, const char *str) {
   (void)r;
 }
 
-[[noreturn]] static void ExitWithError(int error_fd,
-                                       const char *operation) {
+[[noreturn]] static void ExitWithError(int error_fd, const char *operation) {
   int err = errno;
   write_string(error_fd, operation);
   write_string(error_fd, " failed: ");
@@ -71,7 +70,7 @@ static void DisableASLR(int error_fd) {
 }
 
 static void DupDescriptor(int error_fd, const char *file, int fd, int flags) {
-  int target_fd = llvm::sys::RetryAfterSignal(-1, ::open, file, flags, 0666);
+  int target_fd = FileSystem::Instance().Open(file, flags, 0666);
 
   if (target_fd == -1)
     ExitWithError(error_fd, "DupDescriptor-open");
@@ -193,7 +192,11 @@ struct ForkLaunchInfo {
     }
 
     // Start tracing this child that is about to exec.
+#ifdef _AIX
+    if (ptrace64(PT_TRACE_ME, 0, 0, 0, nullptr) == -1)
+#else
     if (ptrace(PT_TRACE_ME, 0, nullptr, 0) == -1)
+#endif
       ExitWithError(error_fd, "ptrace");
   }
 
@@ -269,8 +272,8 @@ ProcessLauncherPosixFork::LaunchProcess(const ProcessLaunchInfo &launch_info,
   ::pid_t pid = ::fork();
   if (pid == -1) {
     // Fork failed
-    error.SetErrorStringWithFormatv("Fork failed with error message: {0}",
-                                    llvm::sys::StrError());
+    error = Status::FromErrorStringWithFormatv(
+        "Fork failed with error message: {0}", llvm::sys::StrError());
     return HostProcess(LLDB_INVALID_PROCESS_ID);
   }
   if (pid == 0) {
@@ -297,7 +300,7 @@ ProcessLauncherPosixFork::LaunchProcess(const ProcessLaunchInfo &launch_info,
   if (buf.empty())
     return HostProcess(pid); // No error. We're done.
 
-  error.SetErrorString(buf);
+  error = Status(buf.str().str());
 
   llvm::sys::RetryAfterSignal(-1, waitpid, pid, nullptr, 0);
 

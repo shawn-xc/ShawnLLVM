@@ -1,5 +1,5 @@
-; RUN: opt %loadPolly \
-; RUN: -S -polly-codegen < %s | FileCheck %s
+; RUN: opt %loadNPMPolly \
+; RUN: -S -passes=polly-codegen < %s | FileCheck %s
 ;
 ;    void f(int *A, int N) {
 ;      for (int i = 0; i < N; i++)
@@ -14,13 +14,13 @@
 ;          }
 ;    }
 ;
-; CHECK: polly.stmt.if.then:
-; CHECK:   %[[trunc:.*]] = trunc i64 %polly.indvar to i32
-; CHECK:   %p_rem = srem i32 %[[trunc]], 4
-; CHECK:   switch i32 %p_rem, label %polly.stmt.sw.epilog [
-; CHECK:     i32 0, label %polly.stmt.sw.bb
-; CHECK:     i32 1, label %polly.stmt.sw.bb.3
-; CHECK:   ]
+; CHECK:      polly.stmt.if.then:
+; CHECK-NEXT:   %2 = trunc i64 %polly.indvar to i2
+; CHECK-NEXT:   %3 = zext i2 %2 to i32
+; CHECK-NEXT:   switch i32 %3, label %polly.stmt.sw.epilog [
+; CHECK-NEXT:     i32 0, label %polly.stmt.sw.bb
+; CHECK-NEXT:     i32 1, label %polly.stmt.sw.bb.3
+; CHECK-NEXT:   ]
 ;
 target datalayout = "e-m:e-i64:64-f80:128-n8:16:32:64-S128"
 

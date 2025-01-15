@@ -13,8 +13,11 @@
 #ifndef MLIR_DIALECT_TOSA_IR_TOSAOPS_H
 #define MLIR_DIALECT_TOSA_IR_TOSAOPS_H
 
+#include "mlir/Bytecode/BytecodeOpInterface.h"
 #include "mlir/Dialect/Traits.h"
+#include "mlir/IR/OpDefinition.h"
 #include "mlir/IR/OpImplementation.h"
+#include "mlir/IR/TypeUtilities.h"
 #include "mlir/Interfaces/InferTypeOpInterface.h"
 #include "mlir/Interfaces/LoopLikeInterface.h"
 #include "mlir/Interfaces/SideEffectInterfaces.h"
@@ -31,13 +34,110 @@ class PatternRewriter;
 
 namespace tosa {
 
+ParseResult parseTypeOrAttr(OpAsmParser &parser, TypeAttr &typeAttr,
+                            Attribute &attr);
+void printTypeOrAttr(OpAsmPrinter &p, Operation *op, TypeAttr type,
+                     Attribute attr);
+
 #include "mlir/Dialect/Tosa/IR/TosaInterfaces.h.inc"
 
 } // namespace tosa
+
+namespace OpTrait {
+namespace tosa {
+
+// This trait verifies if the element type amoung operands and result
+// of multiplication match tosa specification.
+template <typename ConcreteType>
+class MulOperandsAndResultElementType
+    : public TraitBase<ConcreteType, MulOperandsAndResultElementType> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    auto resElemType = getElementTypeOrSelf(op->getResult(0));
+
+    // In cases of floating point type, op requires the same element
+    // type for all operands and result.
+    if (llvm::isa<FloatType>(resElemType))
+      return impl::verifySameOperandsAndResultElementType(op);
+
+    if (auto resIntType = dyn_cast<IntegerType>(resElemType)) {
+      IntegerType lhsIntType =
+          cast<IntegerType>(getElementTypeOrSelf(op->getOperand(0)));
+      IntegerType rhsIntType =
+          cast<IntegerType>(getElementTypeOrSelf(op->getOperand(1)));
+      if (lhsIntType != rhsIntType)
+        return op->emitOpError(
+            "requires the same element type for all operands");
+
+      // Though the spec requires the element type of result to be i32, a more
+      // relaxed way is provided at dialect level for easier cooperating with
+      // other dialects.
+      if (lhsIntType.getWidth() > resIntType.getWidth())
+        return op->emitOpError("invalid data type size for operands or result");
+
+      return success();
+    }
+
+    // In cases of all other types, op requires the same element
+    // type for all operands and result.
+    return impl::verifySameOperandsAndResultElementType(op);
+  }
+};
+
+/// This class indicates that an op is tosa-elementwise (permits broadcasting,
+/// unlike Elementwise trait).
+template <typename ConcreteType>
+class TosaElementwiseOperator
+    : public TraitBase<ConcreteType, TosaElementwiseOperator> {};
+
+LogicalResult verifyTosaResolvableShapeOperands(Operation *op);
+/// This class verifies that tosa shape operands are compile time resolvable
+template <typename ConcreteType>
+class TosaResolvableShapeOperands
+    : public TraitBase<ConcreteType, TosaResolvableShapeOperands> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return verifyTosaResolvableShapeOperands(op);
+  }
+};
+
+LogicalResult verifyTosaShapeOperator(Operation *op);
+/// This class indicates that op operates on tosa shape types
+template <typename ConcreteType>
+class TosaShapeOperator : public TraitBase<ConcreteType, TosaShapeOperator> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return verifyTosaShapeOperator(op);
+  }
+};
+
+LogicalResult verifyTosaShapeOperatorWithSameRanks(Operation *op);
+/// This class indicates that op operates on tosa shape types
+template <typename ConcreteType>
+class TosaShapeOperatorWithSameRanks
+    : public TraitBase<ConcreteType, TosaShapeOperatorWithSameRanks> {
+public:
+  static LogicalResult verifyTrait(Operation *op) {
+    return verifyTosaShapeOperatorWithSameRanks(op);
+  }
+};
+
+} // namespace tosa
+} // namespace OpTrait
+
+namespace tosa {
+
+bool isa_tosa_shape_type(mlir::Type t);
+
+} // namespace tosa
+
 } // namespace mlir
 
 #define GET_ATTRDEF_CLASSES
 #include "mlir/Dialect/Tosa/IR/TosaAttributes.h.inc"
+
+#define GET_TYPEDEF_CLASSES
+#include "mlir/Dialect/Tosa/IR/TosaOpsTypesBase.h.inc"
 
 #define GET_OP_CLASSES
 #include "mlir/Dialect/Tosa/IR/TosaOps.h.inc"

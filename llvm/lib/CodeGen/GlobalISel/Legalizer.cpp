@@ -27,7 +27,6 @@
 #include "llvm/CodeGen/MachineOptimizationRemarkEmitter.h"
 #include "llvm/CodeGen/TargetPassConfig.h"
 #include "llvm/CodeGen/TargetSubtargetInfo.h"
-#include "llvm/InitializePasses.h"
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Error.h"
 
@@ -218,7 +217,7 @@ Legalizer::legalizeMachineFunction(MachineFunction &MF, const LegalizerInfo &LI,
   // This will keep all the observers notified about new insertions/deletions.
   RAIIMFObsDelInstaller Installer(MF, WrapperObserver);
   LegalizerHelper Helper(MF, LI, WrapperObserver, MIRBuilder, KB);
-  LegalizationArtifactCombiner ArtCombiner(MIRBuilder, MRI, LI);
+  LegalizationArtifactCombiner ArtCombiner(MIRBuilder, MRI, LI, KB);
   bool Changed = false;
   SmallVector<MachineInstr *, 128> RetryList;
   do {
@@ -319,8 +318,6 @@ bool Legalizer::runOnMachineFunction(MachineFunction &MF) {
       getAnalysis<GISelCSEAnalysisWrapperPass>().getCSEWrapper();
   MachineOptimizationRemarkEmitter MORE(MF, /*MBFI=*/nullptr);
 
-  const size_t NumBlocks = MF.size();
-
   std::unique_ptr<MachineIRBuilder> MIRBuilder;
   GISelCSEInfo *CSEInfo = nullptr;
   bool EnableCSE = EnableCSEInLegalizer.getNumOccurrences()
@@ -353,16 +350,6 @@ bool Legalizer::runOnMachineFunction(MachineFunction &MF) {
   if (Result.FailedOn) {
     reportGISelFailure(MF, TPC, MORE, "gisel-legalize",
                        "unable to legalize instruction", *Result.FailedOn);
-    return false;
-  }
-  // For now don't support if new blocks are inserted - we would need to fix the
-  // outer loop for that.
-  if (MF.size() != NumBlocks) {
-    MachineOptimizationRemarkMissed R("gisel-legalize", "GISelFailure",
-                                      MF.getFunction().getSubprogram(),
-                                      /*MBB=*/nullptr);
-    R << "inserting blocks is not supported yet";
-    reportGISelFailure(MF, TPC, MORE, R);
     return false;
   }
 

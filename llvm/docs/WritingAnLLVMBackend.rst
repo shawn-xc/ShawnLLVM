@@ -152,7 +152,7 @@ To make your target actually do something, you need to implement a subclass of
 ``lib/Target/DummyTargetMachine.cpp``, but any file in the ``lib/Target``
 directory will be built and should work.  To use LLVM's target independent code
 generator, you should do what all current machine backends do: create a
-subclass of ``LLVMTargetMachine``.  (To create a target from scratch, create a
+subclass of ``CodeGenTargetMachineImpl``.  (To create a target from scratch, create a
 subclass of ``TargetMachine``.)
 
 To get LLVM to actually build and link your target, you need to run ``cmake``
@@ -165,15 +165,15 @@ located in the main ``CMakeLists.txt``.
 Target Machine
 ==============
 
-``LLVMTargetMachine`` is designed as a base class for targets implemented with
-the LLVM target-independent code generator.  The ``LLVMTargetMachine`` class
+``CodeGenTargetMachineImpl`` is designed as a base class for targets implemented with
+the LLVM target-independent code generator. The ``CodeGenTargetMachineImpl`` class
 should be specialized by a concrete target class that implements the various
-virtual methods.  ``LLVMTargetMachine`` is defined as a subclass of
-``TargetMachine`` in ``include/llvm/Target/TargetMachine.h``.  The
-``TargetMachine`` class implementation (``TargetMachine.cpp``) also processes
-numerous command-line options.
+virtual methods.  ``CodeGenTargetMachineImpl`` is defined as a subclass of
+``TargetMachine`` in ``include/llvm/CodeGen/CodeGenTargetMachineImpl.h``.  The
+``TargetMachine`` class implementation (``include/llvm/Target/TargetMachine.cpp``)
+also processes numerous command-line options.
 
-To create a concrete target-specific subclass of ``LLVMTargetMachine``, start
+To create a concrete target-specific subclass of ``CodeGenTargetMachineImpl``, start
 by copying an existing ``TargetMachine`` class and header.  You should name the
 files that you create to reflect your specific target.  For instance, for the
 SPARC target, name the files ``SparcTargetMachine.h`` and
@@ -197,7 +197,7 @@ simply return a class member.
 
   class Module;
 
-  class SparcTargetMachine : public LLVMTargetMachine {
+  class SparcTargetMachine : public CodeGenTargetMachineImpl {
     const DataLayout DataLayout;       // Calculates type size & alignment
     SparcSubtarget Subtarget;
     SparcInstrInfo InstrInfo;
@@ -1503,6 +1503,8 @@ non-v9 SPARC implementations.
   if (TM.getSubtarget<SparcSubtarget>().isV9())
     setOperationAction(ISD::CTPOP, MVT::i32, Legal);
 
+.. _backend-calling-convs:
+
 Calling Conventions
 -------------------
 
@@ -1760,17 +1762,24 @@ command-line options ``-mcpu=`` and ``-mattr=``.
 TableGen uses definitions in the ``Target.td`` and ``Sparc.td`` files to
 generate code in ``SparcGenSubtarget.inc``.  In ``Target.td``, shown below, the
 ``SubtargetFeature`` interface is defined.  The first 4 string parameters of
-the ``SubtargetFeature`` interface are a feature name, an attribute set by the
-feature, the value of the attribute, and a description of the feature.  (The
-fifth parameter is a list of features whose presence is implied, and its
-default value is an empty array.)
+the ``SubtargetFeature`` interface are a feature name, a XXXSubtarget field set
+by the feature, the value of the XXXSubtarget field, and a description of the
+feature.  (The fifth parameter is a list of features whose presence is implied,
+and its default value is an empty array.)
+
+If the value for the field is the string "true" or "false", the field
+is assumed to be a bool and only one SubtargetFeature should refer to it.
+Otherwise, it is assumed to be an integer. The integer value may be the name
+of an enum constant. If multiple features use the same integer field, the
+field will be set to the maximum value of all enabled features that share
+the field.
 
 .. code-block:: text
 
-  class SubtargetFeature<string n, string a, string v, string d,
+  class SubtargetFeature<string n, string f, string v, string d,
                          list<SubtargetFeature> i = []> {
     string Name = n;
-    string Attribute = a;
+    string FieldName = f;
     string Value = v;
     string Desc = d;
     list<SubtargetFeature> Implies = i;

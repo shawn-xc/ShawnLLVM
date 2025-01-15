@@ -97,8 +97,7 @@ private:
   /// a load, eliminate the register by folding the def into the use.
   bool foldAsLoad(LiveInterval *LI, SmallVectorImpl<MachineInstr *> &Dead);
 
-  using ToShrinkSet = SetVector<LiveInterval *, SmallVector<LiveInterval *, 8>,
-                                SmallPtrSet<LiveInterval *, 8>>;
+  using ToShrinkSet = SmallSetVector<LiveInterval *, 8>;
 
   /// Helper for eliminateDeadDefs.
   void eliminateDeadDef(MachineInstr *MI, ToShrinkSet &ToShrink);
@@ -238,7 +237,7 @@ public:
   /// allocator.  These registers should not be split into new intervals
   /// as currently those new intervals are not guaranteed to spill.
   void eliminateDeadDefs(SmallVectorImpl<MachineInstr *> &Dead,
-                         ArrayRef<Register> RegsBeingSpilled = std::nullopt);
+                         ArrayRef<Register> RegsBeingSpilled = {});
 
   /// calculateRegClassAndHint - Recompute register class and hint for each new
   /// register.

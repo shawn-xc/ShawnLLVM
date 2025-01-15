@@ -22,6 +22,7 @@
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/Operator.h"
+#include "llvm/IR/PassInstrumentation.h"
 #include "llvm/IR/Verifier.h"
 #include "llvm/Support/MemoryBuffer.h"
 #include "llvm/Support/SourceMgr.h"
@@ -114,10 +115,16 @@ InjectorIRStrategy::chooseOperation(Value *Src, RandomIRBuilder &IB) {
   return *RS;
 }
 
+static inline iterator_range<BasicBlock::iterator>
+getInsertionRange(BasicBlock &BB) {
+  auto End = BB.getTerminatingMustTailCall() ? std::prev(BB.end()) : BB.end();
+  return make_range(BB.getFirstInsertionPt(), End);
+}
+
 void InjectorIRStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
   SmallVector<Instruction *, 32> Insts;
-  for (auto I = BB.getFirstInsertionPt(), E = BB.end(); I != E; ++I)
-    Insts.push_back(&*I);
+  for (Instruction &I : getInsertionRange(BB))
+    Insts.push_back(&I);
   if (Insts.size() < 1)
     return;
 
@@ -141,7 +148,7 @@ void InjectorIRStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
   for (const auto &Pred : ArrayRef(OpDesc->SourcePreds).slice(1))
     Srcs.push_back(IB.findOrCreateSource(BB, InstsBefore, Srcs, Pred));
 
-  if (Value *Op = OpDesc->BuilderFunc(Srcs, Insts[IP])) {
+  if (Value *Op = OpDesc->BuilderFunc(Srcs, Insts[IP]->getIterator())) {
     // Find a sink and wire up the results of the operation.
     IB.connectToSink(BB, InstsAfter, Op);
   }
@@ -360,7 +367,15 @@ void InsertFunctionStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
 
   auto RS = makeSampler(IB.Rand, Functions);
   Function *F = RS.getSelection();
-  if (!F) {
+  // Some functions accept metadata type or token type as arguments.
+  // We don't call those functions for now.
+  // For example, `@llvm.dbg.declare(metadata, metadata, metadata)`
+  // https://llvm.org/docs/SourceLevelDebugging.html#llvm-dbg-declare
+  auto IsUnsupportedTy = [](Type *T) {
+    return T->isMetadataTy() || T->isTokenTy();
+  };
+  if (!F || IsUnsupportedTy(F->getReturnType()) ||
+      any_of(F->getFunctionType()->params(), IsUnsupportedTy)) {
     F = IB.createFunctionDeclaration(*M);
   }
 
@@ -373,15 +388,15 @@ void InsertFunctionStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
   }
   bool isRetVoid = (F->getReturnType() == Type::getVoidTy(M->getContext()));
   auto BuilderFunc = [FTy, F, isRetVoid](ArrayRef<Value *> Srcs,
-                                         Instruction *Inst) {
+                                         BasicBlock::iterator InsertPt) {
     StringRef Name = isRetVoid ? nullptr : "C";
-    CallInst *Call = CallInst::Create(FTy, F, Srcs, Name, Inst);
+    CallInst *Call = CallInst::Create(FTy, F, Srcs, Name, InsertPt);
     // Don't return this call inst if it return void as it can't be sinked.
     return isRetVoid ? nullptr : Call;
   };
 
   SmallVector<Instruction *, 32> Insts;
-  for (Instruction &I : make_range(BB.getFirstInsertionPt(), BB.end()))
+  for (Instruction &I : getInsertionRange(BB))
     Insts.push_back(&I);
   if (Insts.size() < 1)
     return;
@@ -399,7 +414,7 @@ void InsertFunctionStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
     Srcs.push_back(IB.findOrCreateSource(BB, InstsBefore, Srcs, Pred));
   }
 
-  if (Value *Op = BuilderFunc(Srcs, Insts[IP])) {
+  if (Value *Op = BuilderFunc(Srcs, Insts[IP]->getIterator())) {
     // Find a sink and wire up the results of the operation.
     IB.connectToSink(BB, InstsAfter, Op);
   }
@@ -407,7 +422,7 @@ void InsertFunctionStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
 
 void InsertCFGStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
   SmallVector<Instruction *, 32> Insts;
-  for (Instruction &I : make_range(BB.getFirstInsertionPt(), BB.end()))
+  for (Instruction &I : getInsertionRange(BB))
     Insts.push_back(&I);
   if (Insts.size() < 1)
     return;
@@ -528,7 +543,7 @@ void InsertPHIStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
   if (&BB == &BB.getParent()->getEntryBlock())
     return;
   Type *Ty = IB.randomType();
-  PHINode *PHI = PHINode::Create(Ty, llvm::pred_size(&BB), "", &BB.front());
+  PHINode *PHI = PHINode::Create(Ty, llvm::pred_size(&BB), "", BB.begin());
 
   // Use a map to make sure the same incoming basic block has the same value.
   DenseMap<BasicBlock *, Value *> IncomingValues;
@@ -547,7 +562,7 @@ void InsertPHIStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
     PHI->addIncoming(Src, Pred);
   }
   SmallVector<Instruction *, 32> InstsAfter;
-  for (Instruction &I : make_range(BB.getFirstInsertionPt(), BB.end()))
+  for (Instruction &I : getInsertionRange(BB))
     InstsAfter.push_back(&I);
   IB.connectToSink(BB, InstsAfter, PHI);
 }
@@ -559,7 +574,7 @@ void SinkInstructionStrategy::mutate(Function &F, RandomIRBuilder &IB) {
 }
 void SinkInstructionStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
   SmallVector<Instruction *, 32> Insts;
-  for (Instruction &I : make_range(BB.getFirstInsertionPt(), BB.end()))
+  for (Instruction &I : getInsertionRange(BB))
     Insts.push_back(&I);
   if (Insts.size() < 1)
     return;
@@ -568,9 +583,9 @@ void SinkInstructionStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
   Instruction *Inst = Insts[Idx];
   // `Idx + 1` so we don't sink to ourselves.
   auto InstsAfter = ArrayRef(Insts).slice(Idx + 1);
-  LLVMContext &C = BB.getParent()->getParent()->getContext();
-  // Don't sink terminators, void function calls, etc.
-  if (Inst->getType() != Type::getVoidTy(C))
+  Type *Ty = Inst->getType();
+  // Don't sink terminators, void function calls, token, etc.
+  if (!Ty->isVoidTy() && !Ty->isTokenTy())
     // Find a new sink and wire up the results of the operation.
     IB.connectToSink(BB, InstsAfter, Inst);
 }
@@ -608,9 +623,11 @@ void ShuffleBlockStrategy::mutate(BasicBlock &BB, RandomIRBuilder &IB) {
   auto getAliveChildren = [&AliveInstsLookup](Instruction *I) {
     SmallSetVector<size_t, 8> Children;
     for (Value *U : I->users()) {
-      Instruction *P = dyn_cast<Instruction>(U);
-      if (P && AliveInstsLookup.count(P))
-        Children.insert(AliveInstsLookup[P]);
+      if (Instruction *P = dyn_cast<Instruction>(U)) {
+        auto It = AliveInstsLookup.find(P);
+        if (It != AliveInstsLookup.end())
+          Children.insert(It->second);
+      }
     }
     return Children;
   };

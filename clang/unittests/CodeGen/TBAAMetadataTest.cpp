@@ -39,6 +39,11 @@ auto OmnipotentCharC = MMTuple(
   MConstInt(0, 64)
 );
 
+auto AnyPtr = MMTuple(
+  MMString("any pointer"),
+  OmnipotentCharC,
+  MConstInt(0, 64)
+);
 
 auto OmnipotentCharCXX = MMTuple(
   MMString("omnipotent char"),
@@ -113,11 +118,11 @@ TEST(TBAAMetadataTest, BasicTypes) {
 
   I = matchNext(I,
       MInstruction(Instruction::Store,
-        MValType(Type::getInt8PtrTy(Compiler.Context)),
+        MValType(PointerType::getUnqual(Compiler.Context)),
         MMTuple(
           MMTuple(
-            MMString("any pointer"),
-            OmnipotentCharC,
+            MMString("p1 void"),
+            AnyPtr,
             MConstInt(0)),
           MSameAs(0),
           MConstInt(0))));
@@ -125,11 +130,11 @@ TEST(TBAAMetadataTest, BasicTypes) {
 
   I = matchNext(I,
       MInstruction(Instruction::Store,
-        MValType(Type::getInt32PtrTy(Compiler.Context)),
+        MValType(PointerType::getUnqual(Compiler.Context)),
         MMTuple(
           MMTuple(
-            MMString("any pointer"),
-            OmnipotentCharC,
+            MMString("p1 int"),
+            AnyPtr,
             MConstInt(0)),
           MSameAs(0),
           MConstInt(0))));

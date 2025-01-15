@@ -17,7 +17,6 @@
 #include "lldb/Core/Module.h"
 #include "lldb/Core/PluginManager.h"
 #include "lldb/Core/Value.h"
-#include "lldb/Core/ValueObjectConstResult.h"
 #include "lldb/Symbol/UnwindPlan.h"
 #include "lldb/Target/Process.h"
 #include "lldb/Target/RegisterContext.h"
@@ -29,6 +28,7 @@
 #include "lldb/Utility/RegisterValue.h"
 #include "lldb/Utility/Scalar.h"
 #include "lldb/Utility/Status.h"
+#include "lldb/ValueObject/ValueObjectConstResult.h"
 
 #include "Utility/ARM64_DWARF_Registers.h"
 
@@ -240,13 +240,13 @@ ABIMacOSX_arm64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
                                       lldb::ValueObjectSP &new_value_sp) {
   Status error;
   if (!new_value_sp) {
-    error.SetErrorString("Empty value object for return value.");
+    error = Status::FromErrorString("Empty value object for return value.");
     return error;
   }
 
   CompilerType return_value_type = new_value_sp->GetCompilerType();
   if (!return_value_type) {
-    error.SetErrorString("Null clang type for return value.");
+    error = Status::FromErrorString("Null clang type for return value.");
     return error;
   }
 
@@ -259,7 +259,7 @@ ABIMacOSX_arm64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
     Status data_error;
     const uint64_t byte_size = new_value_sp->GetData(data, data_error);
     if (data_error.Fail()) {
-      error.SetErrorStringWithFormat(
+      error = Status::FromErrorStringWithFormat(
           "Couldn't convert return value to raw data: %s",
           data_error.AsCString());
       return error;
@@ -276,7 +276,7 @@ ABIMacOSX_arm64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
             uint64_t raw_value = data.GetMaxU64(&offset, byte_size);
 
             if (!reg_ctx->WriteRegisterFromUnsigned(x0_info, raw_value))
-              error.SetErrorString("failed to write register x0");
+              error = Status::FromErrorString("failed to write register x0");
           } else {
             uint64_t raw_value = data.GetMaxU64(&offset, 8);
 
@@ -286,43 +286,38 @@ ABIMacOSX_arm64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
               raw_value = data.GetMaxU64(&offset, byte_size - offset);
 
               if (!reg_ctx->WriteRegisterFromUnsigned(x1_info, raw_value))
-                error.SetErrorString("failed to write register x1");
+                error = Status::FromErrorString("failed to write register x1");
             }
           }
         } else {
-          error.SetErrorString("We don't support returning longer than 128 bit "
-                               "integer values at present.");
+          error = Status::FromErrorString(
+              "We don't support returning longer than 128 bit "
+              "integer values at present.");
         }
       } else if (type_flags & eTypeIsFloat) {
         if (type_flags & eTypeIsComplex) {
           // Don't handle complex yet.
-          error.SetErrorString(
+          error = Status::FromErrorString(
               "returning complex float values are not supported");
         } else {
           const RegisterInfo *v0_info = reg_ctx->GetRegisterInfoByName("v0", 0);
 
           if (v0_info) {
             if (byte_size <= 16) {
-              if (byte_size <= RegisterValue::GetMaxByteSize()) {
-                RegisterValue reg_value;
-                error = reg_value.SetValueFromData(*v0_info, data, 0, true);
-                if (error.Success()) {
-                  if (!reg_ctx->WriteRegister(v0_info, reg_value))
-                    error.SetErrorString("failed to write register v0");
-                }
-              } else {
-                error.SetErrorStringWithFormat(
-                    "returning float values with a byte size of %" PRIu64
-                    " are not supported",
-                    byte_size);
-              }
+              RegisterValue reg_value;
+              error = reg_value.SetValueFromData(*v0_info, data, 0, true);
+              if (error.Success())
+                if (!reg_ctx->WriteRegister(v0_info, reg_value))
+                  error =
+                      Status::FromErrorString("failed to write register v0");
             } else {
-              error.SetErrorString("returning float values longer than 128 "
-                                   "bits are not supported");
+              error = Status::FromErrorString(
+                  "returning float values longer than 128 "
+                  "bits are not supported");
             }
-          } else {
-            error.SetErrorString("v0 register is not available on this target");
-          }
+          } else
+            error = Status::FromErrorString(
+                "v0 register is not available on this target");
         }
       }
     } else if (type_flags & eTypeIsVector) {
@@ -335,14 +330,14 @@ ABIMacOSX_arm64::SetReturnValueObject(lldb::StackFrameSP &frame_sp,
             error = reg_value.SetValueFromData(*v0_info, data, 0, true);
             if (error.Success()) {
               if (!reg_ctx->WriteRegister(v0_info, reg_value))
-                error.SetErrorString("failed to write register v0");
+                error = Status::FromErrorString("failed to write register v0");
             }
           }
         }
       }
     }
   } else {
-    error.SetErrorString("no registers are available");
+    error = Status::FromErrorString("no registers are available");
   }
 
   return error;
@@ -814,15 +809,41 @@ ValueObjectSP ABIMacOSX_arm64::GetReturnValueObjectImpl(
   return return_valobj_sp;
 }
 
-lldb::addr_t ABIMacOSX_arm64::FixAddress(addr_t pc, addr_t mask) {
-  lldb::addr_t pac_sign_extension = 0x0080000000000000ULL;
-  // When no mask is specified, clear/set the top byte; preserve
-  // the low 55 bits (00..54) for addressing and bit 55 to indicate
-  // sign.
-  if (mask == 0) {
-    // ~((1ULL<<55)-1)
-    mask = 0xff80000000000000;
+addr_t ABIMacOSX_arm64::FixCodeAddress(addr_t pc) {
+  addr_t pac_sign_extension = 0x0080000000000000ULL;
+  addr_t tbi_mask = 0xff80000000000000ULL;
+  addr_t mask = 0;
+
+  if (ProcessSP process_sp = GetProcessSP()) {
+    mask = process_sp->GetCodeAddressMask();
+    if (pc & pac_sign_extension) {
+      addr_t highmem_mask = process_sp->GetHighmemCodeAddressMask();
+      if (highmem_mask != LLDB_INVALID_ADDRESS_MASK)
+        mask = highmem_mask;
+    }
   }
+  if (mask == LLDB_INVALID_ADDRESS_MASK)
+    mask = tbi_mask;
+
+  return (pc & pac_sign_extension) ? pc | mask : pc & (~mask);
+}
+
+addr_t ABIMacOSX_arm64::FixDataAddress(addr_t pc) {
+  addr_t pac_sign_extension = 0x0080000000000000ULL;
+  addr_t tbi_mask = 0xff80000000000000ULL;
+  addr_t mask = 0;
+
+  if (ProcessSP process_sp = GetProcessSP()) {
+    mask = process_sp->GetDataAddressMask();
+    if (pc & pac_sign_extension) {
+      addr_t highmem_mask = process_sp->GetHighmemDataAddressMask();
+      if (highmem_mask != LLDB_INVALID_ADDRESS_MASK)
+        mask = highmem_mask;
+    }
+  }
+  if (mask == LLDB_INVALID_ADDRESS_MASK)
+    mask = tbi_mask;
+
   return (pc & pac_sign_extension) ? pc | mask : pc & (~mask);
 }
 

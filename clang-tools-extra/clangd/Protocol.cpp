@@ -15,6 +15,7 @@
 #include "support/Logger.h"
 #include "clang/Basic/LLVM.h"
 #include "clang/Index/IndexSymbol.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/StringSwitch.h"
 #include "llvm/Support/ErrorHandling.h"
@@ -393,6 +394,8 @@ bool fromJSON(const llvm::json::Value &Params, ClientCapabilities &R,
       if (auto *Item = Completion->getObject("completionItem")) {
         if (auto SnippetSupport = Item->getBoolean("snippetSupport"))
           R.CompletionSnippets = *SnippetSupport;
+        if (auto LabelDetailsSupport = Item->getBoolean("labelDetailsSupport"))
+          R.CompletionLabelDetail = *LabelDetailsSupport;
         if (const auto *DocumentationFormat =
                 Item->getArray("documentationFormat")) {
           for (const auto &Format : *DocumentationFormat) {
@@ -501,6 +504,45 @@ bool fromJSON(const llvm::json::Value &Params, ClientCapabilities &R,
                   P.field("offsetEncoding")))
       return false;
   }
+
+  if (auto *Experimental = O->getObject("experimental")) {
+    if (auto *TextDocument = Experimental->getObject("textDocument")) {
+      if (auto *Completion = TextDocument->getObject("completion")) {
+        if (auto EditsNearCursor = Completion->getBoolean("editsNearCursor"))
+          R.CompletionFixes |= *EditsNearCursor;
+      }
+      if (auto *References = TextDocument->getObject("references")) {
+        if (auto ContainerSupport = References->getBoolean("container")) {
+          R.ReferenceContainer |= *ContainerSupport;
+        }
+      }
+      if (auto *Diagnostics = TextDocument->getObject("publishDiagnostics")) {
+        if (auto CodeActions = Diagnostics->getBoolean("codeActionsInline")) {
+          R.DiagnosticFixes |= *CodeActions;
+        }
+      }
+      if (auto *InactiveRegions =
+              TextDocument->getObject("inactiveRegionsCapabilities")) {
+        if (auto InactiveRegionsSupport =
+                InactiveRegions->getBoolean("inactiveRegions")) {
+          R.InactiveRegions |= *InactiveRegionsSupport;
+        }
+      }
+    }
+    if (auto *Window = Experimental->getObject("window")) {
+      if (auto Implicit =
+              Window->getBoolean("implicitWorkDoneProgressCreate")) {
+        R.ImplicitProgressCreation |= *Implicit;
+      }
+    }
+    if (auto *OffsetEncoding = Experimental->get("offsetEncoding")) {
+      R.offsetEncoding.emplace();
+      if (!fromJSON(*OffsetEncoding, *R.offsetEncoding,
+                    P.field("offsetEncoding")))
+        return false;
+    }
+  }
+
   return true;
 }
 
@@ -841,7 +883,7 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &O, const SymbolDetails &S) {
   if (!S.containerName.empty()) {
     O << S.containerName;
     llvm::StringRef ContNameRef;
-    if (!ContNameRef.endswith("::")) {
+    if (!ContNameRef.ends_with("::")) {
       O << " ";
     }
   }
@@ -1069,6 +1111,25 @@ bool fromJSON(const llvm::json::Value &E, CompletionItemKindBitset &Out,
   return false;
 }
 
+llvm::json::Value toJSON(const CompletionItemLabelDetails &CD) {
+  llvm::json::Object Result;
+  if (!CD.detail.empty())
+    Result["detail"] = CD.detail;
+  if (!CD.description.empty())
+    Result["description"] = CD.description;
+  return Result;
+}
+
+void removeCompletionLabelDetails(CompletionItem &C) {
+  if (!C.labelDetails)
+    return;
+  if (!C.labelDetails->detail.empty())
+    C.label += C.labelDetails->detail;
+  if (!C.labelDetails->description.empty())
+    C.label = C.labelDetails->description + C.label;
+  C.labelDetails.reset();
+}
+
 llvm::json::Value toJSON(const CompletionItem &CI) {
   assert(!CI.label.empty() && "completion item label is required");
   llvm::json::Object Result{{"label", CI.label}};
@@ -1076,6 +1137,8 @@ llvm::json::Value toJSON(const CompletionItem &CI) {
     Result["kind"] = static_cast<int>(CI.kind);
   if (!CI.detail.empty())
     Result["detail"] = CI.detail;
+  if (CI.labelDetails)
+    Result["labelDetails"] = *CI.labelDetails;
   if (CI.documentation)
     Result["documentation"] = CI.documentation;
   if (!CI.sortText.empty())
@@ -1161,6 +1224,23 @@ bool fromJSON(const llvm::json::Value &Params, RenameParams &R,
   llvm::json::ObjectMapper O(Params, P);
   return O && O.map("textDocument", R.textDocument) &&
          O.map("position", R.position) && O.map("newName", R.newName);
+}
+
+llvm::json::Value toJSON(const RenameParams &R) {
+  return llvm::json::Object{
+      {"textDocument", R.textDocument},
+      {"position", R.position},
+      {"newName", R.newName},
+  };
+}
+
+llvm::json::Value toJSON(const PrepareRenameResult &PRR) {
+  if (PRR.placeholder.empty())
+    return toJSON(PRR.range);
+  return llvm::json::Object{
+      {"range", toJSON(PRR.range)},
+      {"placeholder", PRR.placeholder},
+  };
 }
 
 llvm::json::Value toJSON(const DocumentHighlight &DH) {
@@ -1371,7 +1451,7 @@ bool fromJSON(const llvm::json::Value &Params, ReferenceParams &R,
 }
 
 llvm::json::Value toJSON(SymbolTag Tag) {
-  return llvm::json::Value{static_cast<int>(Tag)};
+  return llvm::json::Value(static_cast<int>(Tag));
 }
 
 llvm::json::Value toJSON(const CallHierarchyItem &I) {
@@ -1434,7 +1514,10 @@ llvm::json::Value toJSON(const InlayHintKind &Kind) {
     return 1;
   case InlayHintKind::Parameter:
     return 2;
-  case InlayHintKind::Designator: // This is an extension, don't serialize.
+  case InlayHintKind::Designator:
+  case InlayHintKind::BlockEnd:
+  case InlayHintKind::DefaultArgument:
+    // This is an extension, don't serialize.
     return nullptr;
   }
   llvm_unreachable("Unknown clang.clangd.InlayHintKind");
@@ -1458,6 +1541,10 @@ bool operator<(const InlayHint &A, const InlayHint &B) {
   return std::tie(A.position, A.range, A.kind, A.label) <
          std::tie(B.position, B.range, B.kind, B.label);
 }
+std::string InlayHint::joinLabels() const {
+  return llvm::join(llvm::map_range(label, [](auto &L) { return L.value; }),
+                    "");
+}
 
 llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, InlayHintKind Kind) {
   auto ToString = [](InlayHintKind K) {
@@ -1468,10 +1555,41 @@ llvm::raw_ostream &operator<<(llvm::raw_ostream &OS, InlayHintKind Kind) {
       return "type";
     case InlayHintKind::Designator:
       return "designator";
+    case InlayHintKind::BlockEnd:
+      return "block-end";
+    case InlayHintKind::DefaultArgument:
+      return "default-argument";
     }
     llvm_unreachable("Unknown clang.clangd.InlayHintKind");
   };
   return OS << ToString(Kind);
+}
+
+llvm::json::Value toJSON(const InlayHintLabelPart &L) {
+  llvm::json::Object Result{{"value", L.value}};
+  if (L.tooltip)
+    Result["tooltip"] = *L.tooltip;
+  if (L.location)
+    Result["location"] = *L.location;
+  if (L.command)
+    Result["command"] = *L.command;
+  return Result;
+}
+
+bool operator==(const InlayHintLabelPart &LHS, const InlayHintLabelPart &RHS) {
+  return std::tie(LHS.value, LHS.location) == std::tie(RHS.value, RHS.location);
+}
+
+bool operator<(const InlayHintLabelPart &LHS, const InlayHintLabelPart &RHS) {
+  return std::tie(LHS.value, LHS.location) < std::tie(RHS.value, RHS.location);
+}
+
+llvm::raw_ostream &operator<<(llvm::raw_ostream &OS,
+                              const InlayHintLabelPart &L) {
+  OS << L.value;
+  if (L.location)
+    OS << " (" << L.location << ")";
+  return OS;
 }
 
 static const char *toString(OffsetEncoding OE) {

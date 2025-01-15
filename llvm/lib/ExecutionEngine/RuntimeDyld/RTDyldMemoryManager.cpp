@@ -42,7 +42,7 @@ extern "C" void __deregister_frame(void *);
 // but using the MingW runtime.
 static void __register_frame(void *p) {
   static bool Searched = false;
-  static void((*rf)(void *)) = 0;
+  static void (*rf)(void *) = 0;
 
   if (!Searched) {
     Searched = true;
@@ -55,7 +55,7 @@ static void __register_frame(void *p) {
 
 static void __deregister_frame(void *p) {
   static bool Searched = false;
-  static void((*df)(void *)) = 0;
+  static void (*df)(void *) = 0;
 
   if (!Searched) {
     Searched = true;
@@ -269,7 +269,7 @@ RTDyldMemoryManager::getSymbolAddressInProcess(const std::string &Name) {
 
   const char *NameStr = Name.c_str();
 
-  // DynamicLibrary::SearchForAddresOfSymbol expects an unmangled 'C' symbol
+  // DynamicLibrary::SearchForAddressOfSymbol expects an unmangled 'C' symbol
   // name so ff we're on Darwin, strip the leading '_' off.
 #ifdef __APPLE__
   if (NameStr[0] == '_')

@@ -23,12 +23,20 @@ MlirAttribute mlirPythonTestTestAttributeGet(MlirContext context) {
   return wrap(python_test::TestAttrAttr::get(unwrap(context)));
 }
 
+MlirTypeID mlirPythonTestTestAttributeGetTypeID(void) {
+  return wrap(python_test::TestAttrAttr::getTypeID());
+}
+
 bool mlirTypeIsAPythonTestTestType(MlirType type) {
   return llvm::isa<python_test::TestTypeType>(unwrap(type));
 }
 
 MlirType mlirPythonTestTestTypeGet(MlirContext context) {
   return wrap(python_test::TestTypeType::get(unwrap(context)));
+}
+
+MlirTypeID mlirPythonTestTestTypeGetTypeID(void) {
+  return wrap(python_test::TestTypeType::getTypeID());
 }
 
 bool mlirTypeIsAPythonTestTestTensorValue(MlirValue value) {

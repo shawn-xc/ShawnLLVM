@@ -6,7 +6,6 @@
 //
 //===----------------------------------------------------------------------===//
 
-#include <array>
 #include <string>
 
 #include "Assembler.h"
@@ -17,6 +16,7 @@
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/ADT/StringRef.h"
 #include "llvm/ADT/Twine.h"
+#include "llvm/Support/Error.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Program.h"
@@ -73,13 +73,19 @@ Error SnippetGenerator::generateConfigurations(
     for (CodeTemplate &CT : Templates) {
       // TODO: Generate as many BenchmarkCode as needed.
       {
+        CT.ScratchSpacePointerInReg =
+            State.getExegesisTarget().getScratchMemoryRegister(
+                State.getTargetMachine().getTargetTriple());
         BenchmarkCode BC;
         BC.Info = CT.Info;
         BC.Key.Instructions.reserve(CT.Instructions.size());
         for (InstructionTemplate &IT : CT.Instructions) {
-          if (auto error = randomizeUnsetVariables(State, ForbiddenRegs, IT))
-            return error;
-          BC.Key.Instructions.push_back(IT.build());
+          if (auto Error = randomizeUnsetVariables(State, ForbiddenRegs, IT))
+            return Error;
+          MCInst Inst = IT.build();
+          if (auto Error = validateGeneratedInstruction(State, Inst))
+            return Error;
+          BC.Key.Instructions.push_back(Inst);
         }
         if (CT.ScratchSpacePointerInReg)
           BC.LiveIns.push_back(CT.ScratchSpacePointerInReg);
@@ -105,6 +111,12 @@ std::vector<RegisterValue> SnippetGenerator::computeRegisterInitialValues(
   // Loop invariant: DefinedRegs[i] is true iif it has been set at least once
   // before the current instruction.
   BitVector DefinedRegs = State.getRATC().emptyRegisters();
+  // If target always expects a scratch memory register as live input,
+  // mark it as defined.
+  const ExegesisTarget &Target = State.getExegesisTarget();
+  unsigned ScratchMemoryReg = Target.getScratchMemoryRegister(
+      State.getTargetMachine().getTargetTriple());
+  DefinedRegs.set(ScratchMemoryReg);
   std::vector<RegisterValue> RIV;
   for (const InstructionTemplate &IT : Instructions) {
     // Returns the register that this Operand sets or uses, or 0 if this is not
@@ -197,7 +209,8 @@ static void setRegisterOperandValue(const RegisterOperandAssignment &ROV,
   if (ROV.Op->isExplicit()) {
     auto &AssignedValue = IB.getValueFor(*ROV.Op);
     if (AssignedValue.isValid()) {
-      assert(AssignedValue.isReg() && AssignedValue.getReg() == ROV.Reg);
+      // TODO don't re-assign register operands which are already "locked"
+      //  by Target in corresponding InstructionTemplate
       return;
     }
     AssignedValue = MCOperand::createReg(ROV.Reg);
@@ -278,6 +291,22 @@ Error randomizeUnsetVariables(const LLVMState &State,
       if (auto Err = randomizeMCOperand(State, IT.getInstr(), Var,
                                         AssignedValue, ForbiddenRegs))
         return Err;
+  }
+  return Error::success();
+}
+
+Error validateGeneratedInstruction(const LLVMState &State, const MCInst &Inst) {
+  for (const auto &Operand : Inst) {
+    if (!Operand.isValid()) {
+      // Mention the particular opcode - it is not necessarily the "main"
+      // opcode being benchmarked by this snippet. For example, serial snippet
+      // generator uses one more opcode when in SERIAL_VIA_NON_MEMORY_INSTR
+      // execution mode.
+      const auto OpcodeName = State.getInstrInfo().getName(Inst.getOpcode());
+      return make_error<Failure>("Not all operands were initialized by the "
+                                 "snippet generator for " +
+                                 OpcodeName + " opcode.");
+    }
   }
   return Error::success();
 }

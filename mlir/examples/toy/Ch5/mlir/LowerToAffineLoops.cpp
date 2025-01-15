@@ -12,7 +12,16 @@
 //
 //===----------------------------------------------------------------------===//
 
+#include "mlir/IR/BuiltinAttributes.h"
 #include "mlir/IR/BuiltinDialect.h"
+#include "mlir/IR/BuiltinOps.h"
+#include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Diagnostics.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/IR/PatternMatch.h"
+#include "mlir/IR/ValueRange.h"
+#include "mlir/Support/LLVM.h"
+#include "mlir/Support/TypeID.h"
 #include "toy/Dialect.h"
 #include "toy/Passes.h"
 
@@ -22,7 +31,15 @@
 #include "mlir/Dialect/MemRef/IR/MemRef.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Transforms/DialectConversion.h"
+#include "llvm/ADT/ArrayRef.h"
+#include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/Sequence.h"
+#include "llvm/Support/Casting.h"
+#include <algorithm>
+#include <cstdint>
+#include <functional>
+#include <memory>
+#include <utility>
 
 using namespace mlir;
 
@@ -62,7 +79,7 @@ using LoopIterationFn = function_ref<Value(
 static void lowerOpToLoops(Operation *op, ValueRange operands,
                            PatternRewriter &rewriter,
                            LoopIterationFn processIteration) {
-  auto tensorType = (*op->result_type_begin()).cast<RankedTensorType>();
+  auto tensorType = llvm::cast<RankedTensorType>((*op->result_type_begin()));
   auto loc = op->getLoc();
 
   // Insert an allocation and deallocation for the result of this operation.
@@ -144,7 +161,7 @@ struct ConstantOpLowering : public OpRewritePattern<toy::ConstantOp> {
 
     // When lowering the constant operation, we allocate and assign the constant
     // values to a corresponding memref allocation.
-    auto tensorType = op.getType().cast<RankedTensorType>();
+    auto tensorType = llvm::cast<RankedTensorType>(op.getType());
     auto memRefType = convertTensorToMemRef(tensorType);
     auto alloc = insertAllocAndDealloc(memRefType, loc, rewriter);
 
@@ -155,8 +172,7 @@ struct ConstantOpLowering : public OpRewritePattern<toy::ConstantOp> {
     SmallVector<Value, 8> constantIndices;
 
     if (!valueShape.empty()) {
-      for (auto i : llvm::seq<int64_t>(
-               0, *std::max_element(valueShape.begin(), valueShape.end())))
+      for (auto i : llvm::seq<int64_t>(0, *llvm::max_element(valueShape)))
         constantIndices.push_back(
             rewriter.create<arith::ConstantIndexOp>(loc, i));
     } else {
@@ -242,8 +258,8 @@ struct PrintOpLowering : public OpConversionPattern<toy::PrintOp> {
                   ConversionPatternRewriter &rewriter) const final {
     // We don't lower "toy.print" in this pass, but we need to update its
     // operands.
-    rewriter.updateRootInPlace(op,
-                               [&] { op->setOperands(adaptor.getOperands()); });
+    rewriter.modifyOpInPlace(op,
+                             [&] { op->setOperands(adaptor.getOperands()); });
     return success();
   }
 };
@@ -342,7 +358,7 @@ void ToyToAffineLoweringPass::runOnOperation() {
   target.addIllegalDialect<toy::ToyDialect>();
   target.addDynamicallyLegalOp<toy::PrintOp>([](toy::PrintOp op) {
     return llvm::none_of(op->getOperandTypes(),
-                         [](Type type) { return type.isa<TensorType>(); });
+                         [](Type type) { return llvm::isa<TensorType>(type); });
   });
 
   // Now that the conversion target has been defined, we just need to provide

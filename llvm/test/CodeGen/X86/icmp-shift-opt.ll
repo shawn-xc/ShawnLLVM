@@ -18,7 +18,7 @@ define i128 @opt_setcc_lt_power_of_2(i128 %a) nounwind {
 ; X86-NEXT:    movl {{[0-9]+}}(%esp), %edx
 ; X86-NEXT:    movl {{[0-9]+}}(%esp), %esi
 ; X86-NEXT:    movl {{[0-9]+}}(%esp), %edi
-; X86-NEXT:    .p2align 4, 0x90
+; X86-NEXT:    .p2align 4
 ; X86-NEXT:  .LBB0_1: # %loop
 ; X86-NEXT:    # =>This Inner Loop Header: Depth=1
 ; X86-NEXT:    addl $1, %edi
@@ -47,7 +47,7 @@ define i128 @opt_setcc_lt_power_of_2(i128 %a) nounwind {
 ; X64:       # %bb.0:
 ; X64-NEXT:    movq %rsi, %rdx
 ; X64-NEXT:    movq %rdi, %rax
-; X64-NEXT:    .p2align 4, 0x90
+; X64-NEXT:    .p2align 4
 ; X64-NEXT:  .LBB0_1: # %loop
 ; X64-NEXT:    # =>This Inner Loop Header: Depth=1
 ; X64-NEXT:    addq $1, %rax
@@ -223,11 +223,11 @@ define i1 @opt_setcc_expanded_shl_correct_shifts(i64 %a, i64 %b) nounwind {
 ; X86-LABEL: opt_setcc_expanded_shl_correct_shifts:
 ; X86:       # %bb.0:
 ; X86-NEXT:    movl {{[0-9]+}}(%esp), %eax
-; X86-NEXT:    orl {{[0-9]+}}(%esp), %eax
-; X86-NEXT:    orl {{[0-9]+}}(%esp), %eax
 ; X86-NEXT:    movl {{[0-9]+}}(%esp), %ecx
-; X86-NEXT:    orl %eax, %ecx
-; X86-NEXT:    shldl $17, %eax, %ecx
+; X86-NEXT:    orl {{[0-9]+}}(%esp), %eax
+; X86-NEXT:    shll $17, %ecx
+; X86-NEXT:    orl {{[0-9]+}}(%esp), %eax
+; X86-NEXT:    orl %ecx, %eax
 ; X86-NEXT:    sete %al
 ; X86-NEXT:    retl
 ;

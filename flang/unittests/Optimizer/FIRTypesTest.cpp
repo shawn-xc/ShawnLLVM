@@ -229,10 +229,10 @@ TEST_F(FIRTypesTest, updateTypeForUnlimitedPolymorphic) {
   mlir::Type i32Ty = mlir::IntegerType::get(&context, 32);
   mlir::Type f32Ty = mlir::FloatType::getF32(&context);
   mlir::Type l1Ty = fir::LogicalType::get(&context, 1);
-  mlir::Type cplx4Ty = fir::ComplexType::get(&context, 4);
+  mlir::Type cplx32Ty = mlir::ComplexType::get(f32Ty);
   mlir::Type char1Ty = fir::CharacterType::get(&context, 1, 10);
   llvm::SmallVector<mlir::Type> intrinsicTypes = {
-      i32Ty, f32Ty, l1Ty, cplx4Ty, char1Ty};
+      i32Ty, f32Ty, l1Ty, cplx32Ty, char1Ty};
 
   for (mlir::Type ty : intrinsicTypes) {
     // `ty` -> none
@@ -283,4 +283,36 @@ TEST_F(FIRTypesTest, getTypeAsString) {
   EXPECT_EQ("10x20xi64", fir::getTypeAsString(arrTy, *kindMap));
   EXPECT_EQ(
       "idx", fir::getTypeAsString(mlir::IndexType::get(&context), *kindMap));
+  EXPECT_EQ("ptr_i32",
+      fir::getTypeAsString(
+          fir::PointerType::get(mlir::IntegerType::get(&context, 32)),
+          *kindMap));
+  EXPECT_EQ("heap_i32",
+      fir::getTypeAsString(
+          fir::HeapType::get(mlir::IntegerType::get(&context, 32)), *kindMap));
+  EXPECT_EQ("box_i32",
+      fir::getTypeAsString(
+          fir::BoxType::get(mlir::IntegerType::get(&context, 32)), *kindMap));
+  EXPECT_EQ("class_i32",
+      fir::getTypeAsString(
+          fir::ClassType::get(mlir::IntegerType::get(&context, 32)), *kindMap));
+  EXPECT_EQ("class_none",
+      fir::getTypeAsString(
+          fir::ClassType::get(mlir::NoneType::get(&context)), *kindMap));
+  auto derivedTy = fir::RecordType::get(&context, "derived");
+  llvm::SmallVector<std::pair<std::string, mlir::Type>> components;
+  components.emplace_back("p1", mlir::IntegerType::get(&context, 64));
+  derivedTy.finalize({}, components);
+  EXPECT_EQ("rec_derived", fir::getTypeAsString(derivedTy, *kindMap));
+  mlir::Type dynArrTy =
+      fir::SequenceType::get({fir::SequenceType::getUnknownExtent(),
+                                 fir::SequenceType::getUnknownExtent()},
+          ty);
+  EXPECT_EQ("UxUxi64", fir::getTypeAsString(dynArrTy, *kindMap));
+  EXPECT_EQ("llvmptr_i32",
+      fir::getTypeAsString(
+          fir::LLVMPointerType::get(mlir::IntegerType::get(&context, 32)),
+          *kindMap));
+  EXPECT_EQ("boxchar_c8xU",
+      fir::getTypeAsString(fir::BoxCharType::get(&context, 1), *kindMap));
 }

@@ -30,6 +30,7 @@
 #include "mlir/Parser/Parser.h"
 #include "mlir/Pass/Pass.h"
 #include "mlir/Pass/PassManager.h"
+#include "mlir/Pass/PassRegistry.h"
 #include "mlir/Support/FileUtilities.h"
 #include "mlir/Support/Timing.h"
 #include "mlir/Support/ToolUtilities.h"
@@ -40,6 +41,7 @@
 #include "llvm/Support/CommandLine.h"
 #include "llvm/Support/FileUtilities.h"
 #include "llvm/Support/InitLLVM.h"
+#include "llvm/Support/LogicalResult.h"
 #include "llvm/Support/ManagedStatic.h"
 #include "llvm/Support/Process.h"
 #include "llvm/Support/Regex.h"
@@ -54,14 +56,14 @@ using namespace llvm;
 namespace {
 class BytecodeVersionParser : public cl::parser<std::optional<int64_t>> {
 public:
-  BytecodeVersionParser(cl::Option &O)
-      : cl::parser<std::optional<int64_t>>(O) {}
+  BytecodeVersionParser(cl::Option &o)
+      : cl::parser<std::optional<int64_t>>(o) {}
 
-  bool parse(cl::Option &O, StringRef /*argName*/, StringRef arg,
+  bool parse(cl::Option &o, StringRef /*argName*/, StringRef arg,
              std::optional<int64_t> &v) {
     long long w;
     if (getAsSignedInteger(arg, 10, w))
-      return O.error("Invalid argument '" + arg +
+      return o.error("Invalid argument '" + arg +
                      "', only integer is supported.");
     v = w;
     return false;
@@ -90,6 +92,11 @@ struct MlirOptMainConfigCLOptions : public MlirOptMainConfig {
         "emit-bytecode", cl::desc("Emit bytecode when generating output"),
         cl::location(emitBytecodeFlag), cl::init(false));
 
+    static cl::opt<bool, /*ExternalStorage=*/true> elideResourcesFromBytecode(
+        "elide-resource-data-from-bytecode",
+        cl::desc("Elide resources when generating bytecode"),
+        cl::location(elideResourceDataFromBytecodeFlag), cl::init(false));
+
     static cl::opt<std::optional<int64_t>, /*ExternalStorage=*/true,
                    BytecodeVersionParser>
         bytecodeVersion(
@@ -102,6 +109,23 @@ struct MlirOptMainConfigCLOptions : public MlirOptMainConfig {
         cl::desc("IRDL file to register before processing the input"),
         cl::location(irdlFileFlag), cl::init(""), cl::value_desc("filename"));
 
+    static cl::opt<VerbosityLevel, /*ExternalStorage=*/true>
+        diagnosticVerbosityLevel(
+            "mlir-diagnostic-verbosity-level",
+            cl::desc("Choose level of diagnostic information"),
+            cl::location(diagnosticVerbosityLevelFlag),
+            cl::init(VerbosityLevel::ErrorsWarningsAndRemarks),
+            cl::values(
+                clEnumValN(VerbosityLevel::ErrorsOnly, "errors", "Errors only"),
+                clEnumValN(VerbosityLevel::ErrorsAndWarnings, "warnings",
+                           "Errors and warnings"),
+                clEnumValN(VerbosityLevel::ErrorsWarningsAndRemarks, "remarks",
+                           "Errors, warnings and remarks")));
+
+    static cl::opt<bool, /*ExternalStorage=*/true> disableDiagnosticNotes(
+        "mlir-disable-diagnostic-notes", cl::desc("Disable diagnostic notes."),
+        cl::location(disableDiagnosticNotesFlag), cl::init(false));
+
     static cl::opt<bool, /*ExternalStorage=*/true> enableDebuggerHook(
         "mlir-enable-debugger-hook",
         cl::desc("Enable Debugger hook for debugging MLIR Actions"),
@@ -113,6 +137,10 @@ struct MlirOptMainConfigCLOptions : public MlirOptMainConfig {
                  "parsing"),
         cl::location(useExplicitModuleFlag), cl::init(false));
 
+    static cl::opt<bool, /*ExternalStorage=*/true> listPasses(
+        "list-passes", cl::desc("Print the list of registered passes and exit"),
+        cl::location(listPassesFlag), cl::init(false));
+
     static cl::opt<bool, /*ExternalStorage=*/true> runReproducer(
         "run-reproducer", cl::desc("Run the pipeline stored in the reproducer"),
         cl::location(runReproducerFlag), cl::init(false));
@@ -122,11 +150,23 @@ struct MlirOptMainConfigCLOptions : public MlirOptMainConfig {
         cl::desc("Print the list of registered dialects and exit"),
         cl::location(showDialectsFlag), cl::init(false));
 
-    static cl::opt<bool, /*ExternalStorage=*/true> splitInputFile(
+    static cl::opt<std::string, /*ExternalStorage=*/true> splitInputFile{
         "split-input-file",
-        cl::desc("Split the input file into pieces and process each "
-                 "chunk independently"),
-        cl::location(splitInputFileFlag), cl::init(false));
+        llvm::cl::ValueOptional,
+        cl::callback([&](const std::string &str) {
+          // Implicit value: use default marker if flag was used without value.
+          if (str.empty())
+            splitInputFile.setValue(kDefaultSplitMarker);
+        }),
+        cl::desc("Split the input file into chunks using the given or "
+                 "default marker and process each chunk independently"),
+        cl::location(splitInputFileFlag),
+        cl::init("")};
+
+    static cl::opt<std::string, /*ExternalStorage=*/true> outputSplitMarker(
+        "output-split-marker",
+        cl::desc("Split marker to use for merging the ouput"),
+        cl::location(outputSplitMarkerFlag), cl::init(kDefaultSplitMarker));
 
     static cl::opt<bool, /*ExternalStorage=*/true> verifyDiagnostics(
         "verify-diagnostics",
@@ -139,8 +179,28 @@ struct MlirOptMainConfigCLOptions : public MlirOptMainConfig {
         cl::desc("Run the verifier after each transformation pass"),
         cl::location(verifyPassesFlag), cl::init(true));
 
+    static cl::opt<bool, /*ExternalStorage=*/true> disableVerifyOnParsing(
+        "mlir-very-unsafe-disable-verifier-on-parsing",
+        cl::desc("Disable the verifier on parsing (very unsafe)"),
+        cl::location(disableVerifierOnParsingFlag), cl::init(false));
+
+    static cl::opt<bool, /*ExternalStorage=*/true> verifyRoundtrip(
+        "verify-roundtrip",
+        cl::desc("Round-trip the IR after parsing and ensure it succeeds"),
+        cl::location(verifyRoundtripFlag), cl::init(false));
+
     static cl::list<std::string> passPlugins(
         "load-pass-plugin", cl::desc("Load passes from plugin library"));
+
+    static cl::opt<std::string, /*ExternalStorage=*/true>
+        generateReproducerFile(
+            "mlir-generate-reproducer",
+            llvm::cl::desc(
+                "Generate an mlir reproducer at the provided filename"
+                " (no crash required)"),
+            cl::location(generateReproducerFileFlag), cl::init(""),
+            cl::value_desc("filename"));
+
     /// Set the callback to load a pass plugin.
     passPlugins.setCallback([&](const std::string &pluginPath) {
       auto plugin = PassPlugin::load(pluginPath);
@@ -166,6 +226,43 @@ struct MlirOptMainConfigCLOptions : public MlirOptMainConfig {
   /// Pointer to static dialectPlugins variable in constructor, needed by
   /// setDialectPluginsCallback(DialectRegistry&).
   cl::list<std::string> *dialectPlugins = nullptr;
+};
+
+/// A scoped diagnostic handler that suppresses certain diagnostics based on
+/// the verbosity level and whether the diagnostic is a note.
+class DiagnosticFilter : public ScopedDiagnosticHandler {
+public:
+  DiagnosticFilter(MLIRContext *ctx, VerbosityLevel verbosityLevel,
+                   bool showNotes = true)
+      : ScopedDiagnosticHandler(ctx) {
+    setHandler([verbosityLevel, showNotes](Diagnostic &diag) {
+      auto severity = diag.getSeverity();
+      switch (severity) {
+      case DiagnosticSeverity::Error:
+        // failure indicates that the error is not handled by the filter and
+        // goes through to the default handler. Therefore, the error can be
+        // successfully printed.
+        return failure();
+      case DiagnosticSeverity::Warning:
+        if (verbosityLevel == VerbosityLevel::ErrorsOnly)
+          return success();
+        else
+          return failure();
+      case DiagnosticSeverity::Remark:
+        if (verbosityLevel == VerbosityLevel::ErrorsOnly ||
+            verbosityLevel == VerbosityLevel::ErrorsAndWarnings)
+          return success();
+        else
+          return failure();
+      case DiagnosticSeverity::Note:
+        if (showNotes)
+          return failure();
+        else
+          return success();
+      }
+      llvm_unreachable("Unknown diagnostic severity");
+    });
+  }
 };
 } // namespace
 
@@ -213,6 +310,110 @@ void MlirOptMainConfigCLOptions::setDialectPluginsCallback(
   });
 }
 
+LogicalResult loadIRDLDialects(StringRef irdlFile, MLIRContext &ctx) {
+  DialectRegistry registry;
+  registry.insert<irdl::IRDLDialect>();
+  ctx.appendDialectRegistry(registry);
+
+  // Set up the input file.
+  std::string errorMessage;
+  std::unique_ptr<MemoryBuffer> file = openInputFile(irdlFile, &errorMessage);
+  if (!file) {
+    emitError(UnknownLoc::get(&ctx)) << errorMessage;
+    return failure();
+  }
+
+  // Give the buffer to the source manager.
+  // This will be picked up by the parser.
+  SourceMgr sourceMgr;
+  sourceMgr.AddNewSourceBuffer(std::move(file), SMLoc());
+
+  SourceMgrDiagnosticHandler sourceMgrHandler(sourceMgr, &ctx);
+
+  // Parse the input file.
+  OwningOpRef<ModuleOp> module(parseSourceFile<ModuleOp>(sourceMgr, &ctx));
+  if (!module)
+    return failure();
+
+  // Load IRDL dialects.
+  return irdl::loadDialects(module.get());
+}
+
+// Return success if the module can correctly round-trip. This intended to test
+// that the custom printers/parsers are complete.
+static LogicalResult doVerifyRoundTrip(Operation *op,
+                                       const MlirOptMainConfig &config,
+                                       bool useBytecode) {
+  // We use a new context to avoid resource handle renaming issue in the diff.
+  MLIRContext roundtripContext;
+  OwningOpRef<Operation *> roundtripModule;
+  roundtripContext.appendDialectRegistry(
+      op->getContext()->getDialectRegistry());
+  if (op->getContext()->allowsUnregisteredDialects())
+    roundtripContext.allowUnregisteredDialects();
+  StringRef irdlFile = config.getIrdlFile();
+  if (!irdlFile.empty() && failed(loadIRDLDialects(irdlFile, roundtripContext)))
+    return failure();
+
+  std::string testType = (useBytecode) ? "bytecode" : "textual";
+  // Print a first time with custom format (or bytecode) and parse it back to
+  // the roundtripModule.
+  {
+    std::string buffer;
+    llvm::raw_string_ostream ostream(buffer);
+    if (useBytecode) {
+      if (failed(writeBytecodeToFile(op, ostream))) {
+        op->emitOpError()
+            << "failed to write bytecode, cannot verify round-trip.\n";
+        return failure();
+      }
+    } else {
+      op->print(ostream,
+                OpPrintingFlags().printGenericOpForm().enableDebugInfo());
+    }
+    FallbackAsmResourceMap fallbackResourceMap;
+    ParserConfig parseConfig(&roundtripContext, config.shouldVerifyOnParsing(),
+                             &fallbackResourceMap);
+    roundtripModule = parseSourceString<Operation *>(buffer, parseConfig);
+    if (!roundtripModule) {
+      op->emitOpError() << "failed to parse " << testType
+                        << " content back, cannot verify round-trip.\n";
+      return failure();
+    }
+  }
+
+  // Print in the generic form for the reference module and the round-tripped
+  // one and compare the outputs.
+  std::string reference, roundtrip;
+  {
+    llvm::raw_string_ostream ostreamref(reference);
+    op->print(ostreamref,
+              OpPrintingFlags().printGenericOpForm().enableDebugInfo());
+    llvm::raw_string_ostream ostreamrndtrip(roundtrip);
+    roundtripModule.get()->print(
+        ostreamrndtrip,
+        OpPrintingFlags().printGenericOpForm().enableDebugInfo());
+  }
+  if (reference != roundtrip) {
+    // TODO implement a diff.
+    return op->emitOpError()
+           << testType
+           << " roundTrip testing roundtripped module differs "
+              "from reference:\n<<<<<<Reference\n"
+           << reference << "\n=====\n"
+           << roundtrip << "\n>>>>>roundtripped\n";
+  }
+
+  return success();
+}
+
+static LogicalResult doVerifyRoundTrip(Operation *op,
+                                       const MlirOptMainConfig &config) {
+  auto txtStatus = doVerifyRoundTrip(op, config, /*useBytecode=*/false);
+  auto bcStatus = doVerifyRoundTrip(op, config, /*useBytecode=*/true);
+  return success(succeeded(txtStatus) && succeeded(bcStatus));
+}
+
 /// Perform the actions on the input file indicated by the command line flags
 /// within the specified context.
 ///
@@ -238,7 +439,7 @@ performActions(raw_ostream &os,
   // untouched.
   PassReproducerOptions reproOptions;
   FallbackAsmResourceMap fallbackResourceMap;
-  ParserConfig parseConfig(context, /*verifyAfterParse=*/true,
+  ParserConfig parseConfig(context, config.shouldVerifyOnParsing(),
                            &fallbackResourceMap);
   if (config.shouldRunReproducer())
     reproOptions.attachResourceParser(parseConfig);
@@ -247,10 +448,16 @@ performActions(raw_ostream &os,
   TimingScope parserTiming = timing.nest("Parser");
   OwningOpRef<Operation *> op = parseSourceFileForTool(
       sourceMgr, parseConfig, !config.shouldUseExplicitModule());
-  context->enableMultithreading(wasThreadingEnabled);
+  parserTiming.stop();
   if (!op)
     return failure();
-  parserTiming.stop();
+
+  // Perform round-trip verification if requested
+  if (config.shouldVerifyRoundtrip() &&
+      failed(doVerifyRoundTrip(op.get(), config)))
+    return failure();
+
+  context->enableMultithreading(wasThreadingEnabled);
 
   // Prepare the pass manager, applying command-line and reproducer options.
   PassManager pm(op.get()->getName(), PassManager::Nesting::Implicit);
@@ -267,12 +474,22 @@ performActions(raw_ostream &os,
   if (failed(pm.run(*op)))
     return failure();
 
+  // Generate reproducers if requested
+  if (!config.getReproducerFilename().empty()) {
+    StringRef anchorName = pm.getAnyOpAnchorName();
+    const auto &passes = pm.getPasses();
+    makeReproducer(anchorName, passes, op.get(),
+                   config.getReproducerFilename());
+  }
+
   // Print the output.
   TimingScope outputTiming = timing.nest("Output");
   if (config.shouldEmitBytecode()) {
     BytecodeWriterConfig writerConfig(fallbackResourceMap);
     if (auto v = config.bytecodeVersionToEmit())
       writerConfig.setDesiredBytecodeVersion(*v);
+    if (config.shouldElideResourceDataFromBytecode())
+      writerConfig.setElideResourceDataFlag();
     return writeBytecodeToFile(op.get(), os, writerConfig);
   }
 
@@ -286,40 +503,13 @@ performActions(raw_ostream &os,
   return success();
 }
 
-LogicalResult loadIRDLDialects(StringRef irdlFile, MLIRContext &ctx) {
-  DialectRegistry registry;
-  registry.insert<irdl::IRDLDialect>();
-  ctx.appendDialectRegistry(registry);
-
-  // Set up the input file.
-  std::string errorMessage;
-  std::unique_ptr<MemoryBuffer> file = openInputFile(irdlFile, &errorMessage);
-  if (!file) {
-    emitError(UnknownLoc::get(&ctx)) << errorMessage;
-    return failure();
-  }
-
-  // Give the buffer to the source manager.
-  // This will be picked up by the parser.
-  SourceMgr sourceMgr;
-  sourceMgr.AddNewSourceBuffer(std::move(file), SMLoc());
-
-  SourceMgrDiagnosticHandler sourceMgrHandler(sourceMgr, &ctx);
-
-  // Parse the input file.
-  OwningOpRef<ModuleOp> module(parseSourceFile<ModuleOp>(sourceMgr, &ctx));
-
-  // Load IRDL dialects.
-  return irdl::loadDialects(module.get());
-}
-
 /// Parses the memory buffer.  If successfully, run a series of passes against
 /// it and print the result.
 static LogicalResult processBuffer(raw_ostream &os,
                                    std::unique_ptr<MemoryBuffer> ownedBuffer,
                                    const MlirOptMainConfig &config,
                                    DialectRegistry &registry,
-                                   llvm::ThreadPool *threadPool) {
+                                   llvm::ThreadPoolInterface *threadPool) {
   // Tell sourceMgr about this buffer, which is what the parser will pick up.
   auto sourceMgr = std::make_shared<SourceMgr>();
   sourceMgr->AddNewSourceBuffer(std::move(ownedBuffer), SMLoc());
@@ -346,6 +536,9 @@ static LogicalResult processBuffer(raw_ostream &os,
   // otherwise just perform the actions without worrying about it.
   if (!config.shouldVerifyDiagnostics()) {
     SourceMgrDiagnosticHandler sourceMgrHandler(*sourceMgr, &context);
+    DiagnosticFilter diagnosticFilter(&context,
+                                      config.getDiagnosticVerbosityLevel(),
+                                      config.shouldShowNotes());
     return performActions(os, sourceMgr, &context, config);
   }
 
@@ -361,51 +554,16 @@ static LogicalResult processBuffer(raw_ostream &os,
   return sourceMgrHandler.verify();
 }
 
-LogicalResult mlir::MlirOptMain(llvm::raw_ostream &outputStream,
-                                std::unique_ptr<llvm::MemoryBuffer> buffer,
-                                DialectRegistry &registry,
-                                const MlirOptMainConfig &config) {
-  if (config.shouldShowDialects()) {
-    llvm::outs() << "Available Dialects: ";
-    interleave(registry.getDialectNames(), llvm::outs(), ",");
-    llvm::outs() << "\n";
-  }
-
-  // The split-input-file mode is a very specific mode that slices the file
-  // up into small pieces and checks each independently.
-  // We use an explicit threadpool to avoid creating and joining/destroying
-  // threads for each of the split.
-  ThreadPool *threadPool = nullptr;
-
-  // Create a temporary context for the sake of checking if
-  // --mlir-disable-threading was passed on the command line.
-  // We use the thread-pool this context is creating, and avoid
-  // creating any thread when disabled.
-  MLIRContext threadPoolCtx;
-  if (threadPoolCtx.isMultithreadingEnabled())
-    threadPool = &threadPoolCtx.getThreadPool();
-
-  auto chunkFn = [&](std::unique_ptr<MemoryBuffer> chunkBuffer,
-                     raw_ostream &os) {
-    return processBuffer(os, std::move(chunkBuffer), config, registry,
-                         threadPool);
-  };
-  return splitAndProcessBuffer(std::move(buffer), chunkFn, outputStream,
-                               config.shouldSplitInputFile(),
-                               /*insertMarkerInOutput=*/true);
-}
-
-LogicalResult mlir::MlirOptMain(int argc, char **argv, llvm::StringRef toolName,
-                                DialectRegistry &registry) {
+std::pair<std::string, std::string>
+mlir::registerAndParseCLIOptions(int argc, char **argv,
+                                 llvm::StringRef toolName,
+                                 DialectRegistry &registry) {
   static cl::opt<std::string> inputFilename(
       cl::Positional, cl::desc("<input file>"), cl::init("-"));
 
   static cl::opt<std::string> outputFilename("o", cl::desc("Output filename"),
                                              cl::value_desc("filename"),
                                              cl::init("-"));
-
-  InitLLVM y(argc, argv);
-
   // Register any command line options.
   MlirOptMainConfig::registerCLOptions(registry);
   registerAsmPrinterCLOptions();
@@ -423,7 +581,69 @@ LogicalResult mlir::MlirOptMain(int argc, char **argv, llvm::StringRef toolName,
   }
   // Parse pass names in main to ensure static initialization completed.
   cl::ParseCommandLineOptions(argc, argv, helpHeader);
+  return std::make_pair(inputFilename.getValue(), outputFilename.getValue());
+}
+
+static LogicalResult printRegisteredDialects(DialectRegistry &registry) {
+  llvm::outs() << "Available Dialects: ";
+  interleave(registry.getDialectNames(), llvm::outs(), ",");
+  llvm::outs() << "\n";
+  return success();
+}
+
+static LogicalResult printRegisteredPassesAndReturn() {
+  mlir::printRegisteredPasses();
+  return success();
+}
+
+LogicalResult mlir::MlirOptMain(llvm::raw_ostream &outputStream,
+                                std::unique_ptr<llvm::MemoryBuffer> buffer,
+                                DialectRegistry &registry,
+                                const MlirOptMainConfig &config) {
+  if (config.shouldShowDialects())
+    return printRegisteredDialects(registry);
+
+  if (config.shouldListPasses())
+    return printRegisteredPassesAndReturn();
+
+  // The split-input-file mode is a very specific mode that slices the file
+  // up into small pieces and checks each independently.
+  // We use an explicit threadpool to avoid creating and joining/destroying
+  // threads for each of the split.
+  ThreadPoolInterface *threadPool = nullptr;
+
+  // Create a temporary context for the sake of checking if
+  // --mlir-disable-threading was passed on the command line.
+  // We use the thread-pool this context is creating, and avoid
+  // creating any thread when disabled.
+  MLIRContext threadPoolCtx;
+  if (threadPoolCtx.isMultithreadingEnabled())
+    threadPool = &threadPoolCtx.getThreadPool();
+
+  auto chunkFn = [&](std::unique_ptr<MemoryBuffer> chunkBuffer,
+                     raw_ostream &os) {
+    return processBuffer(os, std::move(chunkBuffer), config, registry,
+                         threadPool);
+  };
+  return splitAndProcessBuffer(std::move(buffer), chunkFn, outputStream,
+                               config.inputSplitMarker(),
+                               config.outputSplitMarker());
+}
+
+LogicalResult mlir::MlirOptMain(int argc, char **argv,
+                                llvm::StringRef inputFilename,
+                                llvm::StringRef outputFilename,
+                                DialectRegistry &registry) {
+
+  InitLLVM y(argc, argv);
+
   MlirOptMainConfig config = MlirOptMainConfig::createFromCLOptions();
+
+  if (config.shouldShowDialects())
+    return printRegisteredDialects(registry);
+
+  if (config.shouldListPasses())
+    return printRegisteredPassesAndReturn();
 
   // When reading from stdin and the input is a tty, it is often a user mistake
   // and the process "appears to be stuck". Print a message to let the user know
@@ -452,4 +672,15 @@ LogicalResult mlir::MlirOptMain(int argc, char **argv, llvm::StringRef toolName,
   // Keep the output file if the invocation of MlirOptMain was successful.
   output->keep();
   return success();
+}
+
+LogicalResult mlir::MlirOptMain(int argc, char **argv, llvm::StringRef toolName,
+                                DialectRegistry &registry) {
+
+  // Register and parse command line options.
+  std::string inputFilename, outputFilename;
+  std::tie(inputFilename, outputFilename) =
+      registerAndParseCLIOptions(argc, argv, toolName, registry);
+
+  return MlirOptMain(argc, argv, inputFilename, outputFilename, registry);
 }

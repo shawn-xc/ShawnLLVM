@@ -25,7 +25,9 @@ add_lld_library(lldMachO
   OutputSection.cpp
   OutputSegment.cpp
   Relocations.cpp
+  BPSectionOrderer.cpp
   SectionPriorities.cpp
+  Sections.cpp
   SymbolTable.cpp
   Symbols.cpp
   SyntheticSections.cpp
@@ -38,6 +40,7 @@ add_lld_library(lldMachO
   BinaryFormat
   BitReader
   BitWriter
+  CGData
   Core
   DebugInfoDWARF
   Demangle
@@ -54,13 +57,8 @@ add_lld_library(lldMachO
   LINK_LIBS
   lldCommon
   ${LLVM_PTHREAD_LIB}
-  ${XAR_LIB}
 
   DEPENDS
   MachOOptionsTableGen
   ${tablegen_deps}
   )
-
-if(LLVM_HAVE_LIBXAR)
-  target_link_libraries(lldMachO PRIVATE ${XAR_LIB})
-endif()

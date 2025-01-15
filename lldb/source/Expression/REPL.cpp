@@ -9,10 +9,10 @@
 #include "lldb/Expression/REPL.h"
 #include "lldb/Core/Debugger.h"
 #include "lldb/Core/PluginManager.h"
-#include "lldb/Core/StreamFile.h"
 #include "lldb/Expression/ExpressionVariable.h"
 #include "lldb/Expression/UserExpression.h"
 #include "lldb/Host/HostInfo.h"
+#include "lldb/Host/StreamFile.h"
 #include "lldb/Interpreter/CommandInterpreter.h"
 #include "lldb/Interpreter/CommandReturnObject.h"
 #include "lldb/Target/Thread.h"
@@ -57,14 +57,14 @@ lldb::REPLSP REPL::Create(Status &err, lldb::LanguageType language,
 }
 
 std::string REPL::GetSourcePath() {
-  ConstString file_basename = GetSourceFileBasename();
+  llvm::StringRef file_basename = GetSourceFileBasename();
   FileSpec tmpdir_file_spec = HostInfo::GetProcessTempDir();
   if (tmpdir_file_spec) {
     tmpdir_file_spec.SetFilename(file_basename);
     m_repl_source_path = tmpdir_file_spec.GetPath();
   } else {
     tmpdir_file_spec = FileSpec("/tmp");
-    tmpdir_file_spec.AppendPathComponent(file_basename.GetStringRef());
+    tmpdir_file_spec.AppendPathComponent(file_basename);
   }
 
   return tmpdir_file_spec.GetPath();
@@ -117,10 +117,11 @@ const char *REPL::IOHandlerGetFixIndentationCharacters() {
   return (m_enable_auto_indent ? GetAutoIndentCharacters() : nullptr);
 }
 
-ConstString REPL::IOHandlerGetControlSequence(char ch) {
+llvm::StringRef REPL::IOHandlerGetControlSequence(char ch) {
+  static constexpr llvm::StringLiteral control_sequence(":quit\n");
   if (ch == 'd')
-    return ConstString(":quit\n");
-  return ConstString();
+    return control_sequence;
+  return {};
 }
 
 const char *REPL::IOHandlerGetCommandPrefix() { return ":"; }
@@ -338,12 +339,9 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
 
       const char *expr_prefix = nullptr;
       lldb::ValueObjectSP result_valobj_sp;
+      lldb::ExpressionResults execution_results = UserExpression::Evaluate(
+          exe_ctx, expr_options, code.c_str(), expr_prefix, result_valobj_sp);
       Status error;
-      lldb::ExpressionResults execution_results =
-          UserExpression::Evaluate(exe_ctx, expr_options, code.c_str(),
-                                   expr_prefix, result_valobj_sp, error,
-                                   nullptr); // fixed expression
-
       if (llvm::Error err = OnExpressionEvaluated(exe_ctx, code, expr_options,
                                                   execution_results,
                                                   result_valobj_sp, error)) {
@@ -472,7 +470,8 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
 
             // Now set the default file and line to the REPL source file
             m_target.GetSourceManager().SetDefaultFileAndLine(
-                FileSpec(m_repl_source_path), new_default_line);
+                std::make_shared<SupportFile>(FileSpec(m_repl_source_path)),
+                new_default_line);
           }
           static_cast<IOHandlerEditline &>(io_handler)
               .SetBaseLineNumber(m_code.GetSize() + 1);
@@ -496,7 +495,7 @@ void REPL::IOHandlerInputComplete(IOHandler &io_handler, std::string &code) {
 void REPL::IOHandlerComplete(IOHandler &io_handler,
                              CompletionRequest &request) {
   // Complete an LLDB command if the first character is a colon...
-  if (request.GetRawLine().startswith(":")) {
+  if (request.GetRawLine().starts_with(":")) {
     Debugger &debugger = m_target.GetDebugger();
 
     // auto complete LLDB commands
@@ -527,17 +526,15 @@ void REPL::IOHandlerComplete(IOHandler &io_handler,
   current_code.append(m_code.CopyList());
 
   IOHandlerEditline &editline = static_cast<IOHandlerEditline &>(io_handler);
-  const StringList *current_lines = editline.GetCurrentLines();
-  if (current_lines) {
-    const uint32_t current_line_idx = editline.GetCurrentLineIndex();
+  StringList current_lines = editline.GetCurrentLines();
+  const uint32_t current_line_idx = editline.GetCurrentLineIndex();
 
-    if (current_line_idx < current_lines->GetSize()) {
-      for (uint32_t i = 0; i < current_line_idx; ++i) {
-        const char *line_cstr = current_lines->GetStringAtIndex(i);
-        if (line_cstr) {
-          current_code.append("\n");
-          current_code.append(line_cstr);
-        }
+  if (current_line_idx < current_lines.GetSize()) {
+    for (uint32_t i = 0; i < current_line_idx; ++i) {
+      const char *line_cstr = current_lines.GetStringAtIndex(i);
+      if (line_cstr) {
+        current_code.append("\n");
+        current_code.append(line_cstr);
       }
     }
   }
@@ -571,13 +568,11 @@ Status REPL::RunLoop() {
 
   lldb::IOHandlerSP io_handler_sp(GetIOHandler());
 
-  FileSpec save_default_file;
-  uint32_t save_default_line = 0;
+  std::optional<SourceManager::SupportFileAndLine> default_file_line;
 
   if (!m_repl_source_path.empty()) {
     // Save the current default file and line
-    m_target.GetSourceManager().GetDefaultFileAndLine(save_default_file,
-                                                      save_default_line);
+    default_file_line = m_target.GetSourceManager().GetDefaultFileAndLine();
   }
 
   debugger.RunIOHandlerAsync(io_handler_sp);
@@ -616,8 +611,8 @@ Status REPL::RunLoop() {
   }
 
   // Restore the default file and line
-  if (save_default_file && save_default_line != 0)
-    m_target.GetSourceManager().SetDefaultFileAndLine(save_default_file,
-                                                      save_default_line);
+  if (default_file_line)
+    m_target.GetSourceManager().SetDefaultFileAndLine(
+        default_file_line->support_file_sp, default_file_line->line);
   return error;
 }

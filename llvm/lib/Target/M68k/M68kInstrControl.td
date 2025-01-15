@@ -12,7 +12,7 @@
 ///
 ///  Machine:
 ///
-///       BRA   [x]     BSR  [ ]     Bcc [~]     DBcc [ ]     FBcc [ ]
+///       BRA   [x]     BSR  [~]     Bcc [~]     DBcc [ ]     FBcc [ ]
 ///       FDBcc [ ]     FNOP [ ]     FPn [ ]     FScc [ ]     FTST [ ]
 ///       JMP   [~]     JSR  [x]     NOP [x]     RTD  [!]     RTR  [ ]
 ///       RTS   [x]     Scc  [~]     TST [ ]
@@ -179,6 +179,8 @@ class MxBcc<string cc, Operand TARGET, dag disp_8, dag disp_16_32>
         (descend 0b0110, !cast<MxEncCondOp>("MxCC"#cc).Value, disp_8),
         disp_16_32
       );
+
+  let Predicates = !if(!eq(TARGET, MxBrTarget32), [AtLeastM68020], []);
 }
 
 foreach cc = [ "cc", "ls", "lt", "eq", "mi", "ne", "ge",
@@ -190,6 +192,10 @@ foreach cc = [ "cc", "ls", "lt", "eq", "mi", "ne", "ge",
   def B#cc#"16"
     : MxBcc<cc, MxBrTarget16, (descend 0b0000, 0b0000),
             (operand "$dst", 16, (encoder "encodePCRelImm<16>"))>;
+
+  def B#cc#"32"
+    : MxBcc<cc, MxBrTarget32, (descend 0b1111, 0b1111),
+            (operand "$dst", 32, (encoder "encodePCRelImm<32>"))>;
 }
 
 foreach cc = [ "cc", "ls", "lt", "eq", "mi", "ne", "ge",
@@ -215,6 +221,8 @@ class MxBra<Operand TARGET, dag disp_8, dag disp_16_32>
       (descend 0b0110, 0b0000, disp_8),
       disp_16_32
     );
+  
+  let Predicates = !if(!eq(TARGET, MxBrTarget32), [AtLeastM68020], []);
 }
 
 def BRA8  : MxBra<MxBrTarget8,
@@ -223,8 +231,41 @@ def BRA8  : MxBra<MxBrTarget8,
 def BRA16 : MxBra<MxBrTarget16, (descend 0b0000, 0b0000),
                   (operand "$dst", 16, (encoder "encodePCRelImm<16>"))>;
 
+def BRA32 : MxBra<MxBrTarget32, (descend 0b1111, 0b1111),
+                  (operand "$dst", 32, (encoder "encodePCRelImm<32>"),
+                                       (decoder "DecodeImm32"))>;
+
 def : Pat<(br bb:$target), (BRA8 MxBrTarget8:$target)>;
 
+/// -------------------------------------------------
+///  F  E  D  C  B  A  9  8 | 7  6  5  4  3  2  1  0
+/// -------------------------------------------------
+///  0  1  1  0  0  0  0  1 |   8-BIT DISPLACEMENT
+/// -------------------------------------------------
+///  16-BIT DISPLACEMENT IF 8-BIT DISPLACEMENT = $00
+/// -------------------------------------------------
+///  32-BIT DISPLACEMENT IF 8-BIT DISPLACEMENT = $FF
+/// -------------------------------------------------
+
+let isBranch = 1, isTerminator = 1 in
+class MxBsr<Operand TARGET, MxType TYPE, dag disp_8, dag disp_16_32>
+    : MxInst<(outs), (ins TARGET:$dst), "bsr."#TYPE.Prefix#"\t$dst"> {
+  let Inst = (ascend
+                (descend 0b0110, 0b0001, disp_8),
+                 disp_16_32
+              );
+  let Predicates = !if(!eq(TARGET, MxBrTarget32), [AtLeastM68020], []);
+}
+
+def BSR8 : MxBsr<MxBrTarget8, MxType8,
+                (operand "$dst", 8, (encoder "encodePCRelImm<8>")), (ascend)>;
+
+def BSR16 : MxBsr<MxBrTarget16, MxType16, (descend 0b0000, 0b0000),
+                (operand "$dst", 16, (encoder "encodePCRelImm<16>"))>;
+
+def BSR32 : MxBsr<MxBrTarget32, MxType32, (descend 0b1111, 0b1111),
+                (operand "$dst", 32, (encoder "encodePCRelImm<32>"),
+                                     (decoder "DecodeImm32"))>;
 
 //===----------------------------------------------------------------------===//
 // Call
@@ -297,6 +338,10 @@ let isTerminator = 1, isReturn = 1, isBarrier = 1, hasCtrlDep = 1 in {
 
 def RTS : MxInst<(outs), (ins), "rts", []> {
   let Inst = (descend 0b0100, 0b1110, 0b0111, 0b0101);
+}
+
+def RTE: MxInst<(outs), (ins), "rte", []> {
+  let Inst = (descend 0b0100, 0b1110, 0b0111, 0b0011);
 }
 
 let isCodeGenOnly = 1 in

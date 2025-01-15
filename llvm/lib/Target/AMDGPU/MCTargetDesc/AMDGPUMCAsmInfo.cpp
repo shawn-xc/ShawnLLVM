@@ -31,16 +31,14 @@ AMDGPUMCAsmInfo::AMDGPUMCAsmInfo(const Triple &TT,
   InlineAsmEnd = ";#ASMEND";
 
   //===--- Data Emission Directives -------------------------------------===//
-  SunStyleELFSectionSwitchSyntax = true;
   UsesELFSectionDirectiveForBSS = true;
 
   //===--- Global Variable Emission Directives --------------------------===//
-  HasAggressiveSymbolFolding = true;
   COMMDirectiveAlignmentIsInBytes = false;
   HasNoDeadStrip = true;
   //===--- Dwarf Emission Directives -----------------------------------===//
   SupportsDebugInformation = true;
-  UsesCFIForDebug = true;
+  UsesCFIWithoutEH = true;
   DwarfRegNumForCFI = true;
 
   UseIntegratedAssembler = false;
@@ -60,6 +58,10 @@ unsigned AMDGPUMCAsmInfo::getMaxInstLength(const MCSubtargetInfo *STI) const {
   // Maximum for NSA encoded images
   if (STI->hasFeature(AMDGPU::FeatureNSAEncoding))
     return 20;
+
+  // VOP3PX encoding.
+  if (STI->hasFeature(AMDGPU::FeatureGFX950Insts))
+    return 16;
 
   // 64-bit instruction with 32-bit literal.
   if (STI->hasFeature(AMDGPU::FeatureVOP3Literal))
