@@ -119,6 +119,7 @@ static_library("LLVMRISCVCodeGen") {
     "RISCVFrameLowering.cpp",
     "RISCVGatherScatterLowering.cpp",
     "RISCVISelDAGToDAG.cpp",
+    "RISCVISelDAGToDAGAPI.cpp",
     "RISCVISelLowering.cpp",
     "RISCVInsertReadWriteCSR.cpp",
     "RISCVInsertVSETVLI.cpp",
