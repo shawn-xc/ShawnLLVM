@@ -632,3 +632,36 @@ def SSP    : RISCVReg<0, "ssp">;
 
 // Dummy VCIX state register
 def VCIX_STATE : RISCVReg<0, "vcix_state">;
+
+/* ================================================= XIAO PROJECT ======================================= */
+// RegACE - 4-bit register for RISC-V ACE inst
+class RISCVRegACE<bits<4> Enc, string n, list<string> alt = []> : Register<n> {
+  let HWEncoding{3-0} = Enc;
+  let AltNames = alt;
+}
+
+// Define the ACE registers
+let RegAltNameIndices = [ABIRegAltName] in {
+  def ACE0  : RISCVRegACE<0, "ace_reg_0", ["ace_reg_0"]>, DwarfRegNum<[0]>;
+  def ACE1  : RISCVRegACE<1, "ace_reg_1", ["ace_reg_1"]>, DwarfRegNum<[1]>;
+  def ACE2  : RISCVRegACE<2, "ace_reg_2", ["ace_reg_2"]>, DwarfRegNum<[2]>;
+  def ACE3  : RISCVRegACE<3, "ace_reg_3", ["ace_reg_3"]>, DwarfRegNum<[3]>;
+  def ACE4  : RISCVRegACE<4, "ace_reg_4", ["ace_reg_4"]>, DwarfRegNum<[4]>;
+  def ACE5  : RISCVRegACE<5, "ace_reg_5", ["ace_reg_5"]>, DwarfRegNum<[5]>;
+  def ACE6  : RISCVRegACE<6, "ace_reg_6", ["ace_reg_6"]>, DwarfRegNum<[6]>;
+  def ACE7  : RISCVRegACE<7, "ace_reg_7", ["ace_reg_7"]>, DwarfRegNum<[7]>;
+  def ACE8  : RISCVRegACE<8, "ace_reg_8", ["ace_reg_8"]>, DwarfRegNum<[8]>;
+  def ACE9  : RISCVRegACE<9, "ace_reg_9", ["ace_reg_9"]>, DwarfRegNum<[9]>;
+  def ACE10 : RISCVRegACE<10,"ace_reg_10",["ace_reg_10"]>,DwarfRegNum<[10]>;
+  def ACE11 : RISCVRegACE<11,"ace_reg_11",["ace_reg_11"]>,DwarfRegNum<[11]>;
+  def ACE12 : RISCVRegACE<12,"ace_reg_12",["ace_reg_12"]>,DwarfRegNum<[12]>;
+  def ACE13 : RISCVRegACE<13,"ace_reg_13",["ace_reg_13"]>,DwarfRegNum<[13]>;
+  def ACE14 : RISCVRegACE<14,"ace_reg_14",["ace_reg_14"]>,DwarfRegNum<[14]>;
+  def ACE15 : RISCVRegACE<15,"ace_reg_15",["ace_reg_15"]>,DwarfRegNum<[15]>;
+}
+
+// Define a ACE Register class for RISC-V
+def ACE : RegisterClass<"RISCV", [i16], 4, (add
+    ACE0, ACE1, ACE2, ACE3, ACE4, ACE5, ACE6, ACE7,
+    ACE8, ACE9, ACE10,ACE11,ACE12,ACE13,ACE14,ACE15
+    )>;

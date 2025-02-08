@@ -152,6 +152,8 @@ bool RISCVDAGToDAGISel::isClearNode(SDValue &getNode, unsigned &s, unsigned &n) 
 }
 
 bool RISCVDAGToDAGISel::isGetNode(SDValue &getNode, unsigned &s, unsigend &n, SDValue &ebsetRS) {
+  return false;
+  /*
   SDLoc DL(getNode);
   switch (getNode.getOpcode()) {
     default : return false;
@@ -304,5 +306,5 @@ bool RISCVDAGToDAGISel::isGetNode(SDValue &getNode, unsigned &s, unsigend &n, SD
     return true;
     }
   }
-
+  */
 }

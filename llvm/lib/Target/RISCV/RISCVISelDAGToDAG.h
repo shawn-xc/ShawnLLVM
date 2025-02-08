@@ -170,7 +170,8 @@ public:
   bool isClearField(unsigned totBits, uint32_t v, 
                   unsigned &startpos, unsigned &numbits);
 
-  //bool isClearNode(SDValue &getNode, unsigned &s, unsigned &n);
+  bool isClearNode(SDValue &getNode, unsigned &s, unsigned &n);
+  bool isGetNode(SDValue &getNode, unsigned &s, unsigend &n, SDValue &ebsetRS) {
 
 
   // Return the RISC-V condition code that matches the given DAG integer

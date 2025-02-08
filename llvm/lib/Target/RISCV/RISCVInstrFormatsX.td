@@ -10,16 +10,24 @@
 //
 //===----------------------------------------------------------------------===//
 
-class RVInst16<dag outs, dag ins, string opcodestr, string argstr,
-               list<dag> pattern, InstFormat format>
-    : RVInstCommon<outs, ins, opcodestr, argstr, pattern, format> {
-  field bits<16> Inst;
-  // SoftFail is a field the disassembler can use to provide a way for
-  // instructions to not match without killing the whole decode process. It is
-  // mainly used for ARM, but Tablegen expects this field to exist or it fails
-  // to build the decode table.
-  field bits<16> SoftFail = 0;
-  let Size = 2;
+def OPC_ACE     : RISCVOpcode<"ACE",  0b1111011>;
+
+
+class RVInstACE<bits<7> funct7, bits<4> funct4, RISCVOpcode opcode, dag outs, dag ins,
+      string opcodestr, string argstr>
+  : RVInst<outs, ins, opcodestr, argstr, [], InstFormatACE> {
+  bits<5> rs1;
+  bits<5> rs2;
+  bits<3> ace3;
+  bits<1> imm1;
+
+  let Inst{31-25} = funct7;
+  let Inst{24-20} = rs1;
+  let Inst{19-15} = rs2;
+  let Inst{14-11} = funct4;
+  let Inst{10} = imm1;
+  let Inst{9-7} = ace3;
+  let Inst{6-0} = opcode.Value;
 }
 
 class RVInstSA<bits<2> funct2,  bits<3> funct3, RISCVOpcode opcode, dag outs, dag ins, 
@@ -31,11 +39,11 @@ class RVInstSA<bits<2> funct2,  bits<3> funct3, RISCVOpcode opcode, dag outs, da
   bits<5> imm2024;
   bits<5> imm2529;
 
-  let Inst{31-3}  = funct2;
+  let Inst{31-30}  = funct2;
   let Inst{29-25} = imm2529;
-  let Inst{24-20} = imm2024
+  let Inst{24-20} = imm2024;
   let Inst{19-15} = rs1;
   let Inst{14-12} = funct3;
   let Inst{11-7}  = rd;
-  opcode = opcode.Value;
+  let Inst{6-0} = opcode.Value;
 }

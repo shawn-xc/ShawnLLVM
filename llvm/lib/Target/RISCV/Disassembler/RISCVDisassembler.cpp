@@ -700,3 +700,22 @@ DecodeStatus RISCVDisassembler::getInstruction(MCInst &MI, uint64_t &Size,
   Size = 0;
   return MCDisassembler::Fail;
 }
+
+
+/* ==================================== XIAO PROJECT ============================== */
+
+// Decode of ACE Register for RISC-V inst
+static DecodeStatus DecodeACERegisterClass(MCInst &Inst, uint64_t RegNo, uint64_t Address, const MCDisassembler *Decoder) {
+  const FeatureBitset &FeatureBits =
+      static_cast<const MCDisassembler *>(Decoder)
+          ->getSubtargetInfo()
+          .getFeatureBits();
+  bool IsRV32E = FeatureBits[RISCV::FeatureRV32E];
+
+  if (RegNo >= 32 || (IsRV32E && RegNo >= 16))
+    return MCDisassembler::Fail;
+
+  MCRegister Reg = RISCV::ACE0 + RegNo;
+  Inst.addOperand(MCOperand::createReg(Reg));
+  return MCDisassembler::Success;
+}

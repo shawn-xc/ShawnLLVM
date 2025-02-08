@@ -51,7 +51,8 @@ enum {
   InstFormatCLH = 19,
   InstFormatCSB = 20,
   InstFormatCSH = 21,
-  InstFormatOther = 22,
+  InstFormatACE = 22,  // add for ACE
+  InstFormatOther = 23,
 
   InstFormatMask = 31,
   InstFormatShift = 0,
