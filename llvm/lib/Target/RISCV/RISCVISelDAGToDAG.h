@@ -164,14 +164,14 @@ public:
   void selectSF_VC_X_SE(SDNode *Node);
 
   // XC custom insn selection define
-  unsigned getCurNodeSize(SDValue &Node);  
+  unsigned getCurNodeSize(SDValue Node);  
   bool isGetField(unsigned totBits, uint32_t v, 
                   unsigned &startpos, unsigned &numbits);
   bool isClearField(unsigned totBits, uint32_t v, 
                   unsigned &startpos, unsigned &numbits);
 
   bool isClearNode(SDValue &getNode, unsigned &s, unsigned &n);
-  bool isGetNode(SDValue &getNode, unsigned &s, unsigend &n, SDValue &ebsetRS) {
+  bool isGetNode(SDValue &getNode, unsigned &s, unsigned &n, SDValue &ebsetRS);
 
 
   // Return the RISC-V condition code that matches the given DAG integer

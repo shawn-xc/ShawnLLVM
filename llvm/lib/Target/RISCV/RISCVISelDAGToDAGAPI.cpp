@@ -26,7 +26,7 @@
 using namespace llvm;
 
 // 获取当前node的数据size
-unsigned RISCVDAGToDAGISel::getCurNodeSize(SDValue &Node) {
+unsigned RISCVDAGToDAGISel::getCurNodeSize(SDValue Node) {
   unsigned size = 32;
   switch (Node.getOpcode()) {
     default : break;
@@ -149,9 +149,10 @@ bool RISCVDAGToDAGISel::isClearNode(SDValue &getNode, unsigned &s, unsigned &n) 
       return true;
     }
   return false;
+  }
 }
 
-bool RISCVDAGToDAGISel::isGetNode(SDValue &getNode, unsigned &s, unsigend &n, SDValue &ebsetRS) {
+bool RISCVDAGToDAGISel::isGetNode(SDValue &getNode, unsigned &s, unsigned &n, SDValue &ebsetRS) {
   return false;
   /*
   SDLoc DL(getNode);
@@ -220,7 +221,7 @@ bool RISCVDAGToDAGISel::isGetNode(SDValue &getNode, unsigned &s, unsigend &n, SD
           uint32_t andS, andN;
           if (!ifGetField(andRSSize, andVal, andS, andN))
             return false;
-          s = ands = shlNUm;
+          s = ands + shlNUm;
           if (s + andN > 31)
             n = 32 - s;
           else
@@ -249,7 +250,7 @@ bool RISCVDAGToDAGISel::isGetNode(SDValue &getNode, unsigned &s, unsigend &n, SD
           // 右移动的语义
           srlS = 0;
           srlN = srlRSSize - srlNum;
-          s = srlS = ShlNUm;
+          s = srlS + ShlNUm;
           n =srlN;
           return true;  // 先右再左移，后去的元数据可以；i直接拿右翼后处理的值
         }
