@@ -635,10 +635,14 @@ def VCIX_STATE : RISCVReg<0, "vcix_state">;
 
 /* ================================================= XIAO PROJECT ======================================= */
 // RegACE - 4-bit register for RISC-V ACE inst
+let Namespace = "RISCV" in {
+
 class RISCVRegACE<bits<4> Enc, string n, list<string> alt = []> : Register<n> {
   let HWEncoding{3-0} = Enc;
   let AltNames = alt;
 }
+
+} // namespac RISCV
 
 // Define the ACE registers
 let RegAltNameIndices = [ABIRegAltName] in {
@@ -661,7 +665,7 @@ let RegAltNameIndices = [ABIRegAltName] in {
 }
 
 // Define a ACE Register class for RISC-V
-def ACE : RegisterClass<"RISCV", [i16], 4, (add
+def ACE : RISCVRegisterClass<[i32], 32, (add
     ACE0, ACE1, ACE2, ACE3, ACE4, ACE5, ACE6, ACE7,
     ACE8, ACE9, ACE10,ACE11,ACE12,ACE13,ACE14,ACE15
     )>;
