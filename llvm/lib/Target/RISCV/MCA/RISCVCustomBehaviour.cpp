@@ -299,4 +299,8 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTargetMCA() {
                                             createRISCVInstrumentManager);
   TargetRegistry::RegisterInstrumentManager(getTheRISCV64Target(),
                                             createRISCVInstrumentManager);
+  TargetRegistry::RegisterInstrumentManager(getTheRISCV32beTarget(),
+                                            createRISCVInstrumentManager);
+  TargetRegistry::RegisterInstrumentManager(getTheRISCV64beTarget(),
+                                            createRISCVInstrumentManager);
 }

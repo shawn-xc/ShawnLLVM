@@ -338,12 +338,12 @@ MCStreamer *createRISCVELFStreamer(const Triple &T, MCContext &Context,
 } // end anonymous namespace
 
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTargetMC() {
-  for (Target *T : {&getTheRISCV32Target(), &getTheRISCV64Target()}) {
+  for (Target *T : {&getTheRISCV32Target(), &getTheRISCV64Target(),
+                    &getTheRISCV32beTarget(), &getTheRISCV64beTarget()}) {
     TargetRegistry::RegisterMCAsmInfo(*T, createRISCVMCAsmInfo);
     TargetRegistry::RegisterMCObjectFileInfo(*T, createRISCVMCObjectFileInfo);
     TargetRegistry::RegisterMCInstrInfo(*T, createRISCVMCInstrInfo);
     TargetRegistry::RegisterMCRegInfo(*T, createRISCVMCRegisterInfo);
-    TargetRegistry::RegisterMCAsmBackend(*T, createRISCVAsmBackend);
     TargetRegistry::RegisterMCCodeEmitter(*T, createRISCVMCCodeEmitter);
     TargetRegistry::RegisterMCInstPrinter(*T, createRISCVMCInstPrinter);
     TargetRegistry::RegisterMCSubtargetInfo(*T, createRISCVMCSubtargetInfo);
@@ -357,5 +357,13 @@ extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTargetMC() {
     // Register the null target streamer.
     TargetRegistry::RegisterNullTargetStreamer(*T,
                                                createRISCVNullTargetStreamer);
+  }
+
+  for (Target *T : {&getTheRISCV32Target(), &getTheRISCV64Target()}) {
+    TargetRegistry::RegisterMCAsmBackend(*T, createRISCVLEAsmBackend);
+  }
+
+  for (Target *T : {&getTheRISCV32beTarget(), &getTheRISCV64beTarget()}) {
+    TargetRegistry::RegisterMCAsmBackend(*T, createRISCVBEAsmBackend);
   }
 }

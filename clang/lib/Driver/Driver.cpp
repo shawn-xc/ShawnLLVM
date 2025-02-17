@@ -689,10 +689,18 @@ static llvm::Triple computeTargetTriple(const Driver &D,
           ArchName, /*EnableExperimentalExtensions=*/true);
       if (!llvm::errorToBool(ISAInfo.takeError())) {
         unsigned XLen = (*ISAInfo)->getXLen();
-        if (XLen == 32)
-          Target.setArch(llvm::Triple::riscv32);
-        else if (XLen == 64)
-          Target.setArch(llvm::Triple::riscv64);
+        if (XLen == 32) {
+          if (Target.isLittleEndian())
+            Target.setArch(llvm::Triple::riscv32);
+          else
+            Target.setArch(llvm::Triple::riscv32be);
+        }
+        else if (XLen == 64) {
+          if (Target.isLittleEndian())
+            Target.setArch(llvm::Triple::riscv64);
+          else
+            Target.setArch(llvm::Triple::riscv64be);
+        }
       }
     }
   }
@@ -6499,6 +6507,8 @@ const ToolChain &Driver::getToolChain(const ArgList &Args,
         break;
       case llvm::Triple::riscv32:
       case llvm::Triple::riscv64:
+      case llvm::Triple::riscv32be:
+      case llvm::Triple::riscv64be:
         if (toolchains::RISCVToolChain::hasGCCToolchain(*this, Args))
           TC =
               std::make_unique<toolchains::RISCVToolChain>(*this, Target, Args);

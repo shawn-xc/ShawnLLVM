@@ -16,6 +16,9 @@ class Target;
 Target &getTheRISCV32Target();
 Target &getTheRISCV64Target();
 
+Target &getTheRISCV32beTarget();
+Target &getTheRISCV64beTarget();
+
 } // namespace llvm
 
 #endif // LLVM_LIB_TARGET_RISCV_TARGETINFO_RISCVTARGETINFO_H

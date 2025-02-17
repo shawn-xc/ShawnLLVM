@@ -30,7 +30,11 @@ class Target;
 MCCodeEmitter *createRISCVMCCodeEmitter(const MCInstrInfo &MCII,
                                         MCContext &Ctx);
 
-MCAsmBackend *createRISCVAsmBackend(const Target &T, const MCSubtargetInfo &STI,
+MCAsmBackend *createRISCVLEAsmBackend(const Target &T, const MCSubtargetInfo &STI,
+                                    const MCRegisterInfo &MRI,
+                                    const MCTargetOptions &Options);
+
+MCAsmBackend *createRISCVBEAsmBackend(const Target &T, const MCSubtargetInfo &STI,
                                     const MCRegisterInfo &MRI,
                                     const MCTargetOptions &Options);
 

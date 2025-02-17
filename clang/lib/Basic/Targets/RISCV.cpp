@@ -320,6 +320,8 @@ bool RISCVTargetInfo::hasFeature(StringRef Feature) const {
                     .Case("riscv", true)
                     .Case("riscv32", !Is64Bit)
                     .Case("riscv64", Is64Bit)
+                    .Case("riscv32be", !Is64Bit)
+                    .Case("riscv64be", Is64Bit)
                     .Case("32bit", !Is64Bit)
                     .Case("64bit", Is64Bit)
                     .Case("experimental", HasExperimental)

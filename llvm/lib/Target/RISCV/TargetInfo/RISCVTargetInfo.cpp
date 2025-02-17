@@ -20,9 +20,24 @@ Target &llvm::getTheRISCV64Target() {
   return TheRISCV64Target;
 }
 
+Target &llvm::getTheRISCV32beTarget() {
+  static Target TheRISCV32beTarget;
+  return TheRISCV32beTarget;
+}
+
+Target &llvm::getTheRISCV64beTarget() {
+  static Target TheRISCV64beTarget;
+  return TheRISCV64beTarget;
+}
+
 extern "C" LLVM_EXTERNAL_VISIBILITY void LLVMInitializeRISCVTargetInfo() {
   RegisterTarget<Triple::riscv32, /*HasJIT=*/true> X(
       getTheRISCV32Target(), "riscv32", "32-bit RISC-V", "RISCV");
   RegisterTarget<Triple::riscv64, /*HasJIT=*/true> Y(
       getTheRISCV64Target(), "riscv64", "64-bit RISC-V", "RISCV");
+
+  RegisterTarget<Triple::riscv32be, /*HasJIT=*/true> XB(
+      getTheRISCV32beTarget(), "riscv32be", "32-bit RISC-V big-endian", "RISCV");
+  RegisterTarget<Triple::riscv64be, /*HasJIT=*/true> YB(
+      getTheRISCV64beTarget(), "riscv64be", "64-bit RISC-V big-endian", "RISCV");
 }

@@ -210,7 +210,8 @@ static StringRef getOSLibDir(const llvm::Triple &Triple, const ArgList &Args) {
   if (Triple.getArch() == llvm::Triple::x86_64 && Triple.isX32())
     return "libx32";
 
-  if (Triple.getArch() == llvm::Triple::riscv32)
+  if (Triple.getArch() == llvm::Triple::riscv32  ||
+      Triple.getArch() == llvm::Triple::riscv32be)
     return "lib32";
 
   return Triple.isArch32Bit() ? "lib" : "lib64";
@@ -573,7 +574,9 @@ std::string Linux::getDynamicLinker(const ArgList &Args) const {
         (tools::ppc::hasPPCAbiArg(Args, "elfv1")) ? "ld64.so.1" : "ld64.so.2";
     break;
   case llvm::Triple::riscv32:
-  case llvm::Triple::riscv64: {
+  case llvm::Triple::riscv64: 
+  case llvm::Triple::riscv32be:
+  case llvm::Triple::riscv64be:{
     StringRef ArchName = llvm::Triple::getArchTypeName(Arch);
     StringRef ABIName = tools::riscv::getRISCVABI(Args, Triple);
     LibDir = "lib";

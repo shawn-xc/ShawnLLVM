@@ -102,6 +102,10 @@ std::string OHOS::getMultiarchTriple(const llvm::Triple &T) const {
     return "riscv32-linux-ohos";
   case llvm::Triple::riscv64:
     return "riscv64-linux-ohos";
+  case llvm::Triple::riscv32be:
+    return "riscv32be-linux-ohos";
+  case llvm::Triple::riscv64be:
+    return "riscv64be-linux-ohos";
   case llvm::Triple::mipsel:
     return "mipsel-linux-ohos";
   case llvm::Triple::x86:
