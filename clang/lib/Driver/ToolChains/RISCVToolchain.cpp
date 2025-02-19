@@ -164,13 +164,34 @@ void RISCV::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   if (Args.hasArg(options::OPT_mno_relax))
     CmdArgs.push_back("--no-relax");
 
-  bool IsRV64 = ToolChain.getArch() == llvm::Triple::riscv64;
   CmdArgs.push_back("-m");
-  if (IsRV64) {
-    CmdArgs.push_back("elf64lriscv");
-  } else {
-    CmdArgs.push_back("elf32lriscv");
+  switch (ToolChain.getArch()) {
+    default: break;
+    case llvm::triple::riscv64: {
+      CmdArgs.push_back("elf64lriscv");
+      break; 
+    }
+    case llvm::Triple::riscv64be: {
+      CmdArgs.push_back("elf64briscv");
+      break; 
+    }
+    case llvm::Triple::riscv32: {
+      CmdArgs.push_back("elf32lriscv");
+      break; 
+    }
+    case llvm::Triple::riscv32be: {
+      CmdArgs.push_back("elf32briscv");
+      break;
+    }
+
   }
+  //bool IsRV64 = ToolChain.getArch() == llvm::Triple::riscv64;
+  //CmdArgs.push_back("-m");
+  // if (IsRV64) {
+  //   CmdArgs.push_back("elf64lriscv");
+  // } else {
+  //   CmdArgs.push_back("elf32lriscv");
+  // }
   CmdArgs.push_back("-X");
 
   std::string Linker = getToolChain().GetLinkerPath();

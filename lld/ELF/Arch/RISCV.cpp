@@ -337,10 +337,10 @@ void RISCV::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
 
   switch (rel.type) {
   case R_RISCV_32:
-    write32le(loc, val);
+    write32(loc, val);
     return;
   case R_RISCV_64:
-    write64le(loc, val);
+    write64(loc, val);
     return;
 
   case R_RISCV_RVC_BRANCH: {
@@ -482,14 +482,15 @@ void RISCV::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
     *loc += val;
     return;
   case R_RISCV_ADD16:
-    write16le(loc, read16le(loc) + val);
+    write16(loc, read16le(loc) + val);
     return;
   case R_RISCV_ADD32:
-    write32le(loc, read32le(loc) + val);
+    write32(loc, read32le(loc) + val);
     return;
   case R_RISCV_ADD64:
-    write64le(loc, read64le(loc) + val);
+    write64(loc, read64le(loc) + val);
     return;
+  
   case R_RISCV_SUB6:
     *loc = (*loc & 0xc0) | (((*loc & 0x3f) - val) & 0x3f);
     return;
@@ -497,13 +498,13 @@ void RISCV::relocate(uint8_t *loc, const Relocation &rel, uint64_t val) const {
     *loc -= val;
     return;
   case R_RISCV_SUB16:
-    write16le(loc, read16le(loc) - val);
+    write16(loc, read16le(loc) - val);
     return;
   case R_RISCV_SUB32:
-    write32le(loc, read32le(loc) - val);
+    write32(loc, read32le(loc) - val);
     return;
   case R_RISCV_SUB64:
-    write64le(loc, read64le(loc) - val);
+    write64(loc, read64le(loc) - val);
     return;
   case R_RISCV_SET6:
     *loc = (*loc & 0xc0) | (val & 0x3f);
