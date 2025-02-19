@@ -133,8 +133,10 @@ public:
       : RISCVTargetInfo(Triple, Opts) {
     IntPtrType = SignedInt;
     PtrDiffType = SignedInt;
-    SizeType = UnsignedInt;
-    resetDataLayout("e-m:e-p:32:32-i64:64-n32-S128");
+    SizeType = UnsignedInt;       
+    //resetDataLayout("e-m:e-p:32:32-i64:64-n32-S128");
+    resetDataLayout((Twine(Triple.isLittleEndian() ? "e" : "E") +
+                  "-m:e-p:32:32-i64:64-n32-S128").str());
   }
 
   bool setABI(const std::string &Name) override {
@@ -164,7 +166,9 @@ public:
       : RISCVTargetInfo(Triple, Opts) {
     LongWidth = LongAlign = PointerWidth = PointerAlign = 64;
     IntMaxType = Int64Type = SignedLong;
-    resetDataLayout("e-m:e-p:64:64-i64:64-i128:128-n32:64-S128");
+    //resetDataLayout("e-m:e-p:64:64-i64:64-i128:128-n32:64-S128");
+    resetDataLayout((Twine(Triple.isLittleEndian() ? "e" : "E") +
+                     "-m:e-p:64:64-i64:64-i128:128-n32:64-S128").str());
   }
 
   bool setABI(const std::string &Name) override {
