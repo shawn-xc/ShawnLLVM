@@ -614,7 +614,7 @@ static bool isDataFixup(unsigned Kind) {
   case RISCV::fixup_riscv_tlsdesc_load_lo12:
   case RISCV::fixup_riscv_tlsdesc_add_lo12:
   case RISCV::fixup_riscv_tlsdesc_call:
-  case RISCV::FK_Data_leb128:
+  case FK_Data_leb128:
     return false;
   }
 }

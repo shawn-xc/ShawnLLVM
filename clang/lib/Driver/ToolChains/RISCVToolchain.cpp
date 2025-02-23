@@ -167,7 +167,7 @@ void RISCV::Linker::ConstructJob(Compilation &C, const JobAction &JA,
   CmdArgs.push_back("-m");
   switch (ToolChain.getArch()) {
     default: break;
-    case llvm::triple::riscv64: {
+    case llvm::Triple::riscv64: {
       CmdArgs.push_back("elf64lriscv");
       break; 
     }
