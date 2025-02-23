@@ -54,6 +54,39 @@ unsigned RISCVDAGToDAGISel::getCurNodeSize(SDValue Node) {
   return size;
 }
 
+bool RISCVDAGToDAGISel::checkOperandZextLoad(SDValue Node) {
+// 查找当前节点的所有前级节点, 直至遇到load节点； 判断当前load操作是否是有符号操作
+  SmallVector<SDValue, 16> nodes;
+  SmallPtrSet<SDNode *, 32> visited;
+  nodes.push_back(Node);
+
+  while(!nodes.empty() ) {
+    SDValue currentNode = nodes.pop_back_val();
+    if (!visited.insert(currentNode.getNode()).second)
+      continue;
+    visited.insert(currentNode.getNode());
+
+    // 检查当前节点的类型
+    if(currentNode.getOpcode() == ISD::LOAD) {
+      // 停止遍历，如果遇到LOAD节点，
+      LoadSDNode* LD = dyn_cast<LoadSDNode>(currentNode);
+      if (LD->getExtensionType() == ISD::SEXTLOAD) 
+        return false;
+    }
+
+    // 遍历当前节点的前驱
+    for (unsigned i = 0; i < currentNode.getNumOperands(); i++) {
+      SDValue predNode = currentNode.getOperand(i);
+      if (predNode.getOpcode() != ISD::Constant)
+        nodes.push_back(predNode);
+    }
+  }
+
+  return true;
+}
+
+
+
 // 判定当前立即数是否符合获取Get语义
 bool RISCVDAGToDAGISel::isGetField(unsigned totBits, uint32_t v, 
                                   unsigned &startpos, unsigned &numbits) {
@@ -154,24 +187,26 @@ bool RISCVDAGToDAGISel::isClearNode(SDValue &getNode, unsigned &s, unsigned &n) 
 
 bool RISCVDAGToDAGISel::isGetNode(SDValue &getNode, unsigned &s, unsigned &n, SDValue &ebsetRS) {
   return false;
-  /*
+/*
   SDLoc DL(getNode);
   switch (getNode.getOpcode()) {
     default : return false;
     case ISD:: AND: {
       ConstantSDNode * CNode = dyn_cast<ConstantSDNode>(getNode.getOperand(1));
-      if (!CNode)(
+      if (!CNode)
         return false;
+
       int64_t CVal = CNode->getSExtValue();
-      if (!isGetField(32, CVal, s, n)
+      if (!isGetField(32, CVal, s, n))
         return false;
-      if (!checkOperandZextLoad(getNode.getOperand(0)) // 仅能处理零扩展的load操作
+
+      if (!checkOperandZextLoad(getNode.getOperand(0))) // 仅能处理零扩展的load操作
         return false;
     
       // Extui
       SDNode *  extuiNode = CurDAG->getMachinNode(RISCV::EXTUI, DL, MVT::i32, getNode.getOperand(0), 
                           CurDAG->getTargetConstant(s, DL, MVT::i32), 
-                          CurDAG->getTargetConstant(n, DL, MVT::I32));
+                          CurDAG->getTargetConstant(n, DL, MVT::i32));
       ebsetRS = SDValue(extuiNode, 0);
       return true;
     }
@@ -195,7 +230,7 @@ bool RISCVDAGToDAGISel::isGetNode(SDValue &getNode, unsigned &s, unsigned &n, SD
       unsigned shlNum = dyn_cast<ConstantSDNode>(getNode.getOperand(1))->getZextValue();
       SDValue shlRS = getNode->getOperand(0);
 
-      ebsetRS = shlRs;
+      ebsetRS = shlRS;
       switch(shlRS.getOpcode()) {
         default : {
           // set cc 
@@ -214,14 +249,14 @@ bool RISCVDAGToDAGISel::isGetNode(SDValue &getNode, unsigned &s, unsigned &n, SD
         }
 
         case ISD::AND: { // 场景2 
-          if (!dyn_cast<ConstantSDNode>(shlRS.getOperand(1));
+          if (!dyn_cast<ConstantSDNode>(shlRS.getOperand(1)));
             return false;
           uint64_t andVal = dyn_cast<ConstantSDNode>(shlRS.getOperand(1))->getSExtValue();
           uint32_t andRsSize = getCurNodeSize(shlRS.getOperand(0));
           uint32_t andS, andN;
-          if (!ifGetField(andRSSize, andVal, andS, andN))
+          if (!isGetField(andRsSize, andVal, andS, andN))
             return false;
-          s = ands + shlNUm;
+          s = ands + shlNum;
           if (s + andN > 31)
             n = 32 - s;
           else
@@ -230,27 +265,27 @@ bool RISCVDAGToDAGISel::isGetNode(SDValue &getNode, unsigned &s, unsigned &n, SD
           // 判断上游的load操作是否符合零扩展
           if (!checkOperandZextLoad(getNode.getOperand(0).getOperand(0))
             return false;
-          SDNode * extuiNode = CurDAG->getMachineNode(RISCV::EXTUI, DL, MVT::I32, 
+          SDNode * extuiNode = CurDAG->getMachineNode(RISCV::EXTUI, DL, MVT::i32, 
                 getNode.getOperand(0).getOperand(0), 
-                CurDAG->getTargetConstant(andS, DL, MVT::I32), 
+                CurDAG->getTargetConstant(andS, DL, MVT::i32), 
                 CurDAG->getTargetConstant(andN, DL, MVT::i32)); 
-            ebsetRS = SDVaue(extuiNode, 0)J;
+            ebsetRS = SDVaue(extuiNode, 0);
           return true;
         }
 
         case ISD::SRL: { // 场景3 SRL->SRL
-          if (!dyn_caset<ConstantSDNode>(shlRS.getOperand(1));
+          if (!dyn_caset<ConstantSDNode>(shlRS.getOperand(1)))
             return false;
           uint64_t srlNum = dyn_cast<ConstantSDNode>(shlRS.getOperand(1))->getSExtValue();
-          uint32_t srlRSSize = getCurNodeSize(shlRS.geOperand(0));
+          uint32_t srlRsSize = getCurNodeSize(shlRS.geOperand(0));
           uint32_t srlS, srlN;
-          if (srlNum >= srlRSSiz)
+          if (srlNum >= srlRsSize)
             return false;
 
           // 右移动的语义
           srlS = 0;
-          srlN = srlRSSize - srlNum;
-          s = srlS + ShlNUm;
+          srlN = srlRsSize - srlNum;
+          s = srlS + ShlNum;
           n =srlN;
           return true;  // 先右再左移，后去的元数据可以；i直接拿右翼后处理的值
         }
@@ -295,17 +330,17 @@ bool RISCVDAGToDAGISel::isGetNode(SDValue &getNode, unsigned &s, unsigned &n, SD
       // 2. 只有五福好书的load才有意义，因为load节点的输出为i32, i8、i6会领域激战为I32
       // 3. s= 0 n =loadSize
       ConstantSDNode*LD =dyn_cast<ConstantSDNode>(getNode);
-      MachinMemOperand *MMO = LD->getMemOperand();
+      MachineMemOperand *MMO = LD->getMemOperand();
       uint64_t size = MMO->getSize() * 8;
       if (size != 16 || size != 8)
         return false;
-    if (LD->getExtensionType() != ISD::ZEXTLOAD)
-      return false;
-    s= 0;
-    n=size;
-    ebsetRS = getNode;
-    return true;
+      if (LD->getExtensionType() != ISD::ZEXTLOAD)
+        return false;
+      s= 0;
+      n=size;
+      ebsetRS = getNode;
+      return true;
     }
   }
-  */
+*/
 }

@@ -164,7 +164,9 @@ public:
   void selectSF_VC_X_SE(SDNode *Node);
 
   // XC custom insn selection define
-  unsigned getCurNodeSize(SDValue Node);  
+  unsigned getCurNodeSize(SDValue Node);     // get current node data size
+  bool checkOperandZextLoad(SDValue Node);   // is ZextLoad Node ？
+
   bool isGetField(unsigned totBits, uint32_t v, 
                   unsigned &startpos, unsigned &numbits);
   bool isClearField(unsigned totBits, uint32_t v, 
